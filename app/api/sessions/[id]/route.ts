@@ -17,6 +17,7 @@ import { startServerPerf } from "@/lib/perf";
 import { computeSessionRevision } from "@/lib/session-revision";
 import type { SessionEntry } from "@/lib/types";
 import { readSubagentRun, readSubagentSessionResources } from "@/lib/subagents";
+import { getUnsavedSubagentResult } from "@/lib/subagent-runtime";
 import { readSideRelation, sideOwnEntries } from "@/lib/side-session";
 import { readSessionToolSelection } from "@/lib/session-tool-selection";
 import { deleteSessions } from "@/lib/session-delete";
@@ -109,7 +110,7 @@ export async function GET(
       ? await resolveSessionIdByPath(header.parentSession)
       : undefined;
     const subagent = header
-      ? readSubagentRun(entries as never, header.id, filePath)
+      ? getUnsavedSubagentResult(header.id) ?? readSubagentRun(entries as never, header.id, filePath)
       : null;
     const side = !subagent && header ? readSideRelation(entries as never) : null;
     const toolNames = readSubagentSessionResources(entries as never)?.tools

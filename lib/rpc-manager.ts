@@ -22,6 +22,7 @@ import {
   preferUserPowerShellExtension,
 } from "./project-command-env";
 import { beginProjectCommandRun } from "./project-command-evidence";
+import { MANAGED_AUTOMATION_POLICY } from "./managed-automation-policy";
 import { cacheSessionPath, catalogFirstMessage, getLatestModelChange, invalidateSessionListCache, invalidateSessionManagerCache, invalidateSessionPathCache, readLatestSessionEntryId, resolveSessionPath } from "./session-reader";
 import { computeLiveSessionTotalActiveMs } from "./session-timing";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
@@ -60,7 +61,7 @@ import {
   sideToolNames,
 } from "./side-session";
 import { SIDE_SESSION_NAME, sideChatNameFrom } from "./session-family";
-import { createSubagentController, getLiveSubagentStatus, hasUnsettledSubagentRun } from "./subagent-runtime";
+import { createSubagentController, getLiveSubagentStatus, getUnsavedSubagentResult, hasUnsettledSubagentRun } from "./subagent-runtime";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import { resolveShellTools } from "./powershell-settings";
 import { CHAT_ONLY_RESOURCE_LOADER_OPTIONS, contextFilesSystemPrompt } from "./chat-only";
@@ -3270,7 +3271,7 @@ function runtimeMessageActivityMs(entry: SessionMessageEntry): number | undefine
  */
 export function subagentDisplayStatus(sessionId: string, persisted: SubagentSessionStatus): SubagentSessionStatus {
   if (getRegistry().get(sessionId)?.isRunning()) return "running";
-  return getLiveSubagentStatus(sessionId) ?? settleOrphanedSubagentStatus(persisted);
+  return getLiveSubagentStatus(sessionId) ?? getUnsavedSubagentResult(sessionId)?.status ?? settleOrphanedSubagentStatus(persisted);
 }
 
 export function withSubagentDisplayStatus(sessions: SessionInfo[]): SessionInfo[] {
@@ -3278,7 +3279,9 @@ export function withSubagentDisplayStatus(sessions: SessionInfo[]): SessionInfo[
     const relation = session.relation;
     if (relation?.kind !== "subagent") return session;
     const status = subagentDisplayStatus(session.id, relation.status);
-    return status === relation.status ? session : { ...session, relation: { ...relation, status } };
+    const processCleanupUnconfirmed = relation.processCleanupUnconfirmed ?? getUnsavedSubagentResult(session.id)?.processCleanupUnconfirmed;
+    return status === relation.status && processCleanupUnconfirmed === relation.processCleanupUnconfirmed
+      ? session : { ...session, relation: { ...relation, status, processCleanupUnconfirmed } };
   });
 }
 
@@ -3702,11 +3705,12 @@ export async function startRpcSession(
                   systemPromptOverride: () => undefined,
                 }
               : {}),
-            appendSystemPrompt: subagentResources.appendSystemPrompt,
+            appendSystemPrompt: chatOnly ? subagentResources.appendSystemPrompt : [...subagentResources.appendSystemPrompt, MANAGED_AUTOMATION_POLICY],
           }
         : chatOnly
           ? { ...CHAT_ONLY_RESOURCE_LOADER_OPTIONS, extensionFactories: [exactSystemPromptExtension] }
         : {
+            appendSystemPrompt: [MANAGED_AUTOMATION_POLICY],
             extensionFactories: [
               llamaCppExtension,
               ...(builtins?.extensions ?? []),

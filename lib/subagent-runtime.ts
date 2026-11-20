@@ -50,6 +50,7 @@ import {
   preferUserPowerShellExtension,
 } from "./project-command-env";
 import { beginProjectCommandRun, takeProjectCommandRun, PROJECT_COMMAND_CLEANUP_UNCONFIRMED, PROJECT_COMMAND_OUTCOME, type ProjectCommandOutcome } from "./project-command-evidence";
+import { MANAGED_AUTOMATION_POLICY } from "./managed-automation-policy";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { SubagentQueue } from "./subagent-queue";
 import { addWorktree, removeWorktree } from "./worktree";
@@ -451,6 +452,15 @@ export function getLiveSubagentStatus(sessionId: string): SubagentRunInfo["statu
   return getSubagentRuns().get(sessionId)?.run.status;
 }
 
+// Failed appends are not durable. Keep the true outcome for the lifetime of this server,
+// separately from the active run registry so it cannot keep a worker or its descendants live.
+const MAX_UNSAVED_SUBAGENT_RESULTS = 128;
+const unsavedSubagentResults = new Map<string, SubagentRunInfo>();
+
+export function getUnsavedSubagentResult(sessionId: string): SubagentRunInfo | undefined {
+  return unsavedSubagentResults.get(sessionId);
+}
+
 function findSubagentModel(runtime: ModelRuntime, reference: string) {
   const slash = reference.indexOf("/");
   // `provider/modelId` is a hint, as in pi's `--model`: the whole text may also be one provider's
@@ -557,7 +567,17 @@ function recordResult(sessionManager: SessionManager, run: SubagentRunInfo): Sub
     ...(recorded.worktreeCleanupError ? { worktreeCleanupError: recorded.worktreeCleanupError } : {}),
     ...(recorded.worktreeExists !== undefined ? { worktreeExists: recorded.worktreeExists } : {}),
   };
-  sessionManager.appendCustomEntry(SUBAGENT_RESULT_TYPE, entry);
+  try {
+    sessionManager.appendCustomEntry(SUBAGENT_RESULT_TYPE, entry);
+    unsavedSubagentResults.delete(run.sessionId);
+  } catch {
+    unsavedSubagentResults.set(run.sessionId, recorded);
+    if (unsavedSubagentResults.size > MAX_UNSAVED_SUBAGENT_RESULTS) {
+      const oldest = unsavedSubagentResults.keys().next().value;
+      if (oldest !== undefined) unsavedSubagentResults.delete(oldest);
+    }
+    console.warn("[pi-web] Could not persist subagent result; retained in this server only:", run.sessionId);
+  }
   return recorded;
 }
 
@@ -681,7 +701,7 @@ export function createSubagentController(
                 systemPromptOverride: () => undefined,
               }
             : {}),
-          appendSystemPrompt,
+          appendSystemPrompt: chatOnly ? appendSystemPrompt : [...appendSystemPrompt, MANAGED_AUTOMATION_POLICY],
         },
       });
 
@@ -1090,7 +1110,8 @@ export function createSubagentController(
         return result;
       }
       stored.run = { ...stored.run, status: "running" };
-      manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running" });
+      manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running",
+        ...(initialRun.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
       request.onUpdate?.(stored.run);
       let result: SubagentRunInfo;
       // Earlier runs' messages are on the same branch; only this run's answers are its result.
@@ -1157,7 +1178,8 @@ export function createSubagentController(
     let queued: ReturnType<SubagentQueue<SubagentRunInfo>["enqueue"]>;
     try {
       queued = getSubagentQueue().enqueue(parentSessionId, readSubagentSettings().maxConcurrent, execute, (state) => {
-        if (state === "queued") manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "queued" });
+        if (state === "queued") manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "queued",
+          ...(initialRun.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
         stored.run = { ...stored.run, status: state };
         request.onUpdate?.(stored.run);
         dependencies.invalidateSessionList();
@@ -1179,6 +1201,8 @@ export function createSubagentController(
   async function get(sessionId: string): Promise<SubagentRunInfo | null> {
     const stored = getSubagentRuns().get(sessionId);
     if (stored) return stored.run;
+    const unsaved = getUnsavedSubagentResult(sessionId);
+    if (unsaved) return unsaved;
     const wrapper = dependencies.getSession(sessionId);
     if (wrapper?.isAlive()) {
       const run = readSubagentRun(

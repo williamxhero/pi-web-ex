@@ -14,18 +14,18 @@ console.log('Evidence directory: '+out);
 const logPath=join(out,'managed-browser-server.log');
 writeFileSync(logPath,'',{flag:'wx'});
 const mode=process.argv[2] ?? 'stop';
-assert.ok(['stop','failure','interaction','success','t44','restart','restart-cleanup'].includes(mode), 'Expected stop, failure, interaction, success, t44, restart or restart-cleanup');
+assert.ok(['stop','failure','interaction','success','t44','restart','restart-cleanup','agent-disabled','resume-cleanup'].includes(mode), 'Unsupported acceptance mode');
 const tmp=mkdtempSync(join(out,'managed-')), agent=join(tmp,'agent'), cwd=join(tmp,'project'), marker=join(cwd,'pid.txt');
 mkdirSync(join(agent,'agents'),{recursive:true}); mkdirSync(cwd);
 writeFileSync(join(cwd,'nested-process.cjs'), "require('node:fs').writeFileSync('nested.pid',String(process.pid));setInterval(()=>console.log('managed fixture still running'),350).unref();setTimeout(()=>{},65000);");
 const json=(file,data)=>writeFileSync(join(agent,file),JSON.stringify(data));
-json('agents/settings.json',{builtInEnabled:true});
+json('agents/settings.json',{builtInEnabled:mode!=='agent-disabled'});
 json('settings.json',{defaultProvider:'acceptance',defaultModel:'fixture',defaultTools:['read','powershell','edit','write']});
 writeFileSync(join(agent,'agents','pid-check.md'),'---\nname: pid-check\ndescription: Loopback PID fixture\ntools: powershell\nload_extensions: false\nload_skills: false\n---\nRun the supplied local fixture.\n');
 const task='Managed PID acceptance child', reply='Parent finished before child command';
 let release; const gate=new Promise(r=>release=r);
 let delegated=false, childRequest=false, server, browser, sentinel, authServer;
-let interactionCommand, authRequests=0, unauthorized=0;
+let interactionCommand, authRequests=0, unauthorized=0, disabledChecked=false, parentPolicyLoaded=false;
 const useT44=mode==='t44';
 const t44=process.env.PI_WEB_ACCEPTANCE_T44_RUNNER?.replaceAll("'","''");
 assert.ok(!useT44||t44,'Supply PI_WEB_ACCEPTANCE_T44_RUNNER for the isolated, offline T44 runner');
@@ -33,6 +33,7 @@ const appCommand=useT44 ? "& node '"+t44+"'; exit $LASTEXITCODE" : {
   stop: '& node nested-process.cjs',
   restart: '& node nested-process.cjs',
   'restart-cleanup': '& node nested-process.cjs',
+  'resume-cleanup': '& node nested-process.cjs',
   failure: "Write-Output 'fixture-stdout'; [Console]::Error.WriteLine('fixture-stderr'); exit 7",
   success: "& git --version; if ($LASTEXITCODE) { exit $LASTEXITCODE }; & cmd.exe /d /c 'echo managed-cmd'; exit $LASTEXITCODE",
 }[mode];
@@ -44,7 +45,15 @@ const model=createServer(async(req,res)=>{
     const b=JSON.parse(body), names=b.tools?.map(t=>t.function.name)??[];
     console.log('loopback model tools:',names.join(','));
     let delta;
-    if(names.includes('Agent')&&!delegated){delegated=true;delta={tool_calls:[tool('call_managed_acceptance','Agent',{description:task,subagent_type:'pid-check',prompt:'Run the PID fixture',run_in_background:true})]};}
+    if(mode==='agent-disabled'){
+      const messages=JSON.stringify(b.messages);
+      assert.ok(messages.includes('Pi Web managed automation policy:')&&messages.includes('no-session fallback')&&messages.includes('without a visible console'));
+      assert.ok(!names.includes('Agent'),'managed Agent must actually be disabled');
+      disabledChecked=true;
+      delta={content:'Managed Agent is unavailable; no independent agent was started.'};
+    }else if(names.includes('Agent')&&!delegated){
+      assert.ok(JSON.stringify(b.messages).includes('Pi Web managed automation policy:'));
+      parentPolicyLoaded=true;delegated=true;delta={tool_calls:[tool('call_managed_acceptance','Agent',{description:task,subagent_type:'pid-check',prompt:'Run the PID fixture',run_in_background:true})]};}
     else if(!names.includes('Agent')&&names.includes('powershell')&&!childRequest){childRequest=true; await gate; delta={tool_calls:[tool('call_pid_fixture','powershell',{command:'Set-Content -LiteralPath pid.txt -Value $PID; '+(interactionCommand??appCommand),...(useT44?{timeout:195}:mode==='interaction'?{timeout:12}:{})})]};}
     else delta={content:names.includes('Agent')?reply:'Fixture ended'};
     res.writeHead(200,{'content-type':'text/event-stream'});
@@ -73,6 +82,16 @@ try {
  await retry('isolated server ready',async()=>{if(server&&server.exitCode!==null) throw Error('Next exited '+server.exitCode);assert.deepEqual((await api('/api/sessions')).sessions,[]);return true;},40000);
  const parent=(await api('/api/agent/new',{cwd,type:'prompt',message:'Delegate the local PID fixture in background',provider:'acceptance',modelId:'fixture',thinkingLevel:'off'})).sessionId;
  assert.ok(parent);console.log('parent',parent);
+ if(mode==='agent-disabled'){
+   await retry('disabled Agent replied without a child',async()=>{
+     const rows=(await api('/api/sessions')).sessions;
+     const detail=await api(`/api/sessions/${parent}`);
+     const running=await api('/api/agent/running');
+     return disabledChecked&&rows.length===1&&rows[0].id===parent&&!running.runningSessionIds.includes(parent)
+       &&JSON.stringify(detail.context).includes('no independent agent was started');
+   });
+   console.log('PASS loaded managed policy with Agent disabled; one parent and no child');
+ }else{
  const child=await retry('parent idle, linked child running',async()=>{
    const row=(await api('/api/sessions')).sessions.find(v=>v.relation?.kind==='subagent'&&v.relation.parentSessionId===parent);
    if(!row)return;
@@ -82,14 +101,15 @@ try {
  const sessionPath=join(agent,'sessions',readdirSync(join(agent,'sessions'),{recursive:true}).find(x=>x.endsWith(child+'.jsonl')));
  const readEntries=()=>readFileSync(sessionPath,'utf8').trim().split('\n').map(JSON.parse);
  assert.ok(readEntries().some(e=>e.customType==='pi-web:subagent'&&e.data.parentSessionId===parent&&e.data.parentToolCallId==='call_managed_acceptance'));
+ assert.ok(parentPolicyLoaded);
  console.log('PASS parent settled while child active and gated; persisted linked JSONL',child);
  release();
  const alive=pid=>{try{process.kill(pid,0);return true;}catch(e){if(e.code==='ESRCH')return false;throw e;}};
- if(mode==='stop'||mode==='restart'||mode==='restart-cleanup'){
+ if(mode==='stop'||mode==='restart'||mode==='restart-cleanup'||mode==='resume-cleanup'){
    const pid=await retry('live shell PID',()=>{const id=Number(readFileSync(marker,'utf8'));return id>0&&alive(id)&&id;});
    const nested=await retry('live nested PID',()=>{const id=Number(readFileSync(join(cwd,'nested.pid'),'utf8'));return id>0&&alive(id)&&id;});
-   if(mode==='restart'||mode==='restart-cleanup'){
-     if(mode==='restart-cleanup'){
+   if(mode==='restart'||mode==='restart-cleanup'||mode==='resume-cleanup'){
+     if(mode==='restart-cleanup'||mode==='resume-cleanup'){
        // Freeze the crash image at the real, already-written warning, before any result entry.
        await api(`/api/agent/${child}`,{type:'abort'});
        const prefix=await retry('durable cleanup warning',()=>{
@@ -103,6 +123,12 @@ try {
        const exited=once(server,'exit');
        const killed=spawnSync('taskkill.exe',['/pid',String(server.pid),'/t','/f'],{windowsHide:true,encoding:'utf8',timeout:5000});
        assert.equal(killed.status,0,killed.stderr); await exited;
+       if(mode==='resume-cleanup'){
+         // Recreate the durable snapshot: only the previous result carries the warning.
+         const markerEntry=prefix.pop();
+         prefix.push({ ...markerEntry, customType:'pi-web:subagent-result',data:{version:1,status:'aborted',completedAt:markerEntry.timestamp,processCleanupUnconfirmed:true} });
+         prefix.push({ ...markerEntry,id:'29faee17',parentId:markerEntry.id,customType:'pi-web:subagent-status',data:{version:1,status:'running'} });
+       }
        writeFileSync(sessionPath,prefix.map(entry=>JSON.stringify(entry)).join('\n')+'\n');
      }else{
      const exited=once(server,'exit');
@@ -115,7 +141,7 @@ try {
        const snap=await api('/api/agent/running');
        return row?.relation?.status==='interrupted'&&!snap.runningSessionIds.includes(child)&&!snap.subagentsActiveSessionIds.includes(parent)&&!alive(pid)&&!alive(nested);
      },40000);
-     if(mode==='restart-cleanup'){
+     if(mode==='restart-cleanup'||mode==='resume-cleanup'){
        const after=await api(`/api/sessions/${child}`);
        assert.equal(after.info.relation.processCleanupUnconfirmed,true);
        const {chromium}=await import(pathToFileURL(join(root,'node_modules/playwright/index.mjs')));
@@ -124,7 +150,7 @@ try {
        await page.goto(base+'/?session='+parent,{waitUntil:'domcontentloaded',timeout:16000});
        await page.getByRole('button',{name:/^Agents/i}).first().click();
        await page.getByRole('option').filter({hasText:task}).getByText(/^(Interrupted · Process cleanup unconfirmed|已中断 · 进程清理未确认|已中斷 · 程序清理未確認)$/i).waitFor();
-       console.log('PASS Agents reads interrupted and cleanup unconfirmed from warning-only crash image after isolated Next restart');
+       console.log('PASS Agents reads interrupted and cleanup unconfirmed after isolated Next restart:',mode);
      }
      console.log('PASS interrupted after actual isolated Next restart; shell and nested PIDs gone:',pid,nested);
    }else{
@@ -182,6 +208,7 @@ try {
      for(const token of (useT44?['T44 selected test exit 0']:['git version','managed-cmd']))assert.ok(text.includes(token),text);
    }
    console.log('PASS persisted '+mode+' command output/result:',text);
+ }
  }
 }finally{
  release();await browser?.close();

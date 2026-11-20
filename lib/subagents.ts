@@ -997,8 +997,11 @@ export function readSubagentRun(entries: readonly SessionEntry[], sessionId: str
       ? statusData.status
       : "interrupted";
   // Process cleanup has no automatic confirmation on retry or resume. The original warning remains applicable.
-  const cleanupUnconfirmed = result?.processCleanupUnconfirmed === true || entries.some((entry) =>
-    entry.type === "custom" && entry.customType === PROJECT_COMMAND_CLEANUP_UNCONFIRMED);
+  const cleanupUnconfirmed = entries.some((entry) => entry.type === "custom" && (
+    entry.customType === PROJECT_COMMAND_CLEANUP_UNCONFIRMED ||
+    ((entry.customType === SUBAGENT_RESULT_TYPE || entry.customType === SUBAGENT_STATUS_TYPE) &&
+      isRecord(entry.data) && entry.data.processCleanupUnconfirmed === true)
+  ));
   return {
     sessionId,
     sessionPath,
