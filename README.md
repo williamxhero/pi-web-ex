@@ -1,11 +1,11 @@
 # Pi Web Ex
 
-本库基于 Pi Web，新增了两个会话操作：
+本库基于 [Pi Web](https://github.com/agegr/pi-web)，新增了两个会话操作：
 
 | 功能 | 使用方式 |
 | --- | --- |
 | 复制 Session ID | 在侧栏打开会话的 `⋯` 菜单，选择「复制 Session ID」，即可把该会话的 ID 复制到剪贴板。 |
-| 自动续跑开关 | 加载 `loop-to-done` 扩展后，在顶部「系统」「工具」右侧点击「自动续跑」即可开启当前会话的续跑，再点一次关闭。关闭不会打断正在生成的回复。 |
+| 自动续跑开关 | 加载 [loop-to-done 扩展](https://github.com/williamxhero/pi-extension/blob/main/extensions/loop-to-done/README.md)后，在顶部「系统」「工具」右侧点击「自动续跑」即可开启当前会话的续跑，再点一次关闭。关闭不会打断正在生成的回复。 |
 
 自动续跑的监督逻辑由独立插件提供，本库负责显示状态和转发按钮操作。
 
