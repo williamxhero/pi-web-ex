@@ -62,6 +62,7 @@ interface HostSession {
   readonly cwd: string;
   isAlive(): boolean;
   isRunning(): boolean;
+  isDirectPromptArriving?(): boolean;
   waitUntilReady(): Promise<void>;
   /**
    * Connect the session's MCP servers before a run prompts the SDK session directly, past the
@@ -117,6 +118,7 @@ type ParentNotification = Pick<SubagentRunInfo, "sessionId" | "parentSessionId" 
 
 declare global {
   var __piSubagentRuns: Map<string, StoredSubagentExecution> | undefined;
+  var __piSubagentResumes: Set<string> | undefined;
   var __piSubagentQueue: SubagentQueue<SubagentRunInfo> | undefined;
   var __piSubagentConsumedResults: Map<string, string> | undefined;
   var __piSubagentParentNotifications: Set<ParentNotification> | undefined;
@@ -447,6 +449,15 @@ function settleOrphanedRun(run: SubagentRunInfo): SubagentRunInfo {
 }
 
 /** The status of a run this process still holds, so a listing does not have to guess from its file. */
+// Shared with direct chat admission, including while resume is still reopening the child.
+function subagentResumeReservations(): Set<string> {
+  return globalThis.__piSubagentResumes ??= new Set();
+}
+
+export function blocksDirectSubagentMessage(sessionId: string): boolean {
+  return subagentResumeReservations().has(sessionId) || getSubagentRuns().has(sessionId);
+}
+
 export function getLiveSubagentStatus(sessionId: string): SubagentRunInfo["status"] | undefined {
   return getSubagentRuns().get(sessionId)?.run.status;
 }
@@ -1069,17 +1080,17 @@ export function createSubagentController(
     }
   }
 
-  const resuming = new Set<string>();
-
   async function resume(request: ResumeSubagentRequest): Promise<SubagentExecution> {
-    if (resuming.has(request.sessionId) || getSubagentRuns().has(request.sessionId)) {
+    const wrapper = dependencies.getSession(request.sessionId);
+    if (blocksDirectSubagentMessage(request.sessionId) || wrapper?.isDirectPromptArriving?.()) {
       throw new Error("Subagent is already running or resuming");
     }
-    resuming.add(request.sessionId);
+    const reservations = subagentResumeReservations();
+    reservations.add(request.sessionId);
     try {
       return await resumeReserved(request);
     } finally {
-      resuming.delete(request.sessionId);
+      reservations.delete(request.sessionId);
     }
   }
 
@@ -1160,6 +1171,7 @@ export function createSubagentController(
       let evidence: ReturnType<typeof takeProjectCommandRun>;
       try {
         if (!wrapper!.isAlive()) throw new Error(CLOSED_BEFORE_RUN);
+        if (wrapper!.isRunning() || wrapper!.isDirectPromptArriving?.()) throw new Error("Subagent is already running");
         manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running",
           ...(initialRun.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
         stored.run = { ...stored.run, status: "running" };

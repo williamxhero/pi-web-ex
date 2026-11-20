@@ -62,7 +62,7 @@ import {
   sideToolNames,
 } from "./side-session";
 import { SIDE_BOUNDARY_MESSAGE_TYPE, SIDE_SESSION_NAME, sideChatNameFrom } from "./session-family";
-import { createSubagentController, getLiveSubagentStatus, getUnsavedSubagentResult, hasUnsettledSubagentRun } from "./subagent-runtime";
+import { blocksDirectSubagentMessage, createSubagentController, getLiveSubagentStatus, getUnsavedSubagentResult, hasUnsettledSubagentRun } from "./subagent-runtime";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import { resolveShellTools } from "./powershell-settings";
 import { CHAT_ONLY_RESOURCE_LOADER_OPTIONS, contextFilesSystemPrompt } from "./chat-only";
@@ -544,6 +544,10 @@ export class AgentSessionWrapper {
 
   isRunning(): boolean {
     return this._alive && (this.pendingPromptCount > 0 || this.inner.isStreaming || this.inner.isCompacting || this.shellRunning);
+  }
+
+  isDirectPromptArriving(): boolean {
+    return this.arrivingPromptCount > 0;
   }
 
   /**
@@ -1385,6 +1389,14 @@ export class AgentSessionWrapper {
 
   async send(command: Record<string, unknown>): Promise<unknown> {
     const type = command.type as string;
+    const checkManagedMessageAdmission = () => {
+      if (type !== "prompt" && type !== "steer" && type !== "follow_up") return;
+      if (!blocksDirectSubagentMessage(this.sessionId)) return;
+      // Steering an actually streaming child remains supported; an idle SDK queue is not delivery.
+      if (this.inner.isStreaming && (type !== "prompt" || command.streamingBehavior === "steer" || command.streamingBehavior === "followUp")) return;
+      throw new Error("Message not accepted: this child has a managed run. Try again when it settles.");
+    };
+    checkManagedMessageAdmission();
     // A status read (the chat's reconciliation, every few seconds while it runs) would hide the
     // last command that did something; it never resets the idle timer either.
     if (type !== "get_state") {
@@ -1420,6 +1432,7 @@ export class AgentSessionWrapper {
         throw new Error("Session is being copied to a new session");
       }
 
+      checkManagedMessageAdmission();
       if (type === "prompt" || type === "steer" || type === "follow_up") {
         const imageError = validateAgentImages(command.images);
         if (imageError) throw new Error(imageError);
@@ -1441,6 +1454,7 @@ export class AgentSessionWrapper {
         // this submission starts a run or joins its streaming queue.
         const releaseAdmission = await this.acquirePromptAdmission();
         try {
+          checkManagedMessageAdmission();
           // A steer or follow-up joins the run beside a `!` command, as pi's TUI
           // queues it; only a prompt that would start a run waits for the command.
           if (this.shellRunning && !(command.streamingBehavior && this.inner.isStreaming)) {
