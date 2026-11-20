@@ -75,10 +75,10 @@ export function preventWindowsGitPrompts(
     GIT_TERMINAL_PROMPT: "0",
     GIT_ASKPASS: "",
     GCM_INTERACTIVE: "never",
-    SSH_ASKPASS_REQUIRE: "never",
-    // Standard OpenSSH cannot fall back to terminal passwords or host-key confirmation.
-    GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes",
-    GIT_SSH_VARIANT: "ssh",
+    // OpenSSH must use askpass rather than a terminal. The Windows null device
+    // cannot launch an interactive helper, including when a default one is installed.
+    SSH_ASKPASS_REQUIRE: "force",
+    SSH_ASKPASS: "NUL",
   };
   const result = { ...environment };
   for (const name of Object.keys(result)) {

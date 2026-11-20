@@ -42,6 +42,12 @@ The control intentionally shows one console; require both a show and a focus eve
 
 ## Evidence: Pi Web Ex #1 / #4
 
+### Verified candidate `5f63054`
+
+On a logged-in Windows desktop, `5f6305403f07be43b237d2c99290367a06ed4472` passed all eight ordinary-project scenarios, the Git/npx and SSH probes, and the selected T44 regression. The full T44 chain ran after a 90-second quiet baseline: 1/1 passed, strict trace exit 0; no owned windows, focus or taskbar events, new browser starts, browser show/focus, unresolved console events, or lost ETW events. The T44 summary (`passive-5f63054-window-1/desktop.summary.json`) has SHA-256 `268C0BC1BCBC40769103A6230313B13A1BFF0D116C27ABFD8401B99739B0E8BE`. The passed HTTP-interaction retake supersedes only its initial contaminated trace; the initial failure is preserved. These artifacts apply to that commit, not to later changes.
+
+### Historical runs (not current acceptance)
+
 Windows logged-in desktop, Next 16.4.6, runtime candidate `d1dc46fe916120c02f060381533539f8820745c9`; T44 sample from `2b525d69917c42889ae0746808db5b2685a59fa2` in an exported, patched copy. The commands used a loopback fixture model, not a live external model. No existing NF worktree was changed.
 
 | Run | Evidence | Visible | Focus | Owned processes missing exit |
@@ -54,7 +60,7 @@ Windows logged-in desktop, Next 16.4.6, runtime candidate `d1dc46fe916120c02f060
 | Isolated Next restart | A live child read back as interrupted, not active; shell and its Node descendant had exited | 0 | 0 | 0 |
 | T44 sample | Selected regression 1/1 passed; exit 0 persisted; 2,813 Git processes, no browser process | 0 | 0 | 0 |
 
-An independent earlier T44 capture counted 2,845 Git starts, zero attributed show/focus events and no unmatched console events; it attributed 135 shows and 134 focus events to a concurrent, unrelated NF run. The versioned experiment above rechecked the ordinary project and T44 using the reusable probe. The shell-hook rerun saw zero attributed taskbar additions or flashes across the ordinary project and T44. The ordinary-project runs also passed the browser check (only the intentional headless test driver started in the Stop case). In the latest T44 run the selected case and taskbar checks passed and no browser process started, but the probe recorded 12 show/focus events in two pre-existing browser processes. The before/after browser instance inventory did not change. Those events lack causal attribution, so the full T44 browser-activation gate remains open pending a browser-quiescent logged-in desktop. The restart used only the probe's own Next process tree and reused its isolated session directory. Its probe was introduced in `1175797a5ab8e4aa856ab8fa8a2d5ee1e659b349`; the runtime code did not change between that commit and `d1dc46f`.
+An independent earlier T44 capture counted 2,845 Git starts, zero attributed show/focus events and no unmatched console events; it attributed 135 shows and 134 focus events to a concurrent, unrelated NF run. The versioned experiment above rechecked the ordinary project and T44 using the reusable probe. The shell-hook rerun saw zero attributed taskbar additions or flashes across the ordinary project and T44. The ordinary-project runs also passed the browser check (only the intentional headless test driver started in the Stop case). In that older T44 run the selected case and taskbar checks passed and no browser process started, but the probe recorded 12 show/focus events in two pre-existing browser processes. The before/after browser instance inventory did not change. Those events lack causal attribution, so that older run did not pass its browser-activation gate. The restart used only the probe's own Next process tree and reused its isolated session directory. Its probe was introduced in `1175797a5ab8e4aa856ab8fa8a2d5ee1e659b349`; the runtime code did not change between that commit and `d1dc46f`.
 
 The following artifact names refer to sanitized local acceptance summaries; binary ETL and raw desktop metadata stay out of Git:
 
