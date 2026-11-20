@@ -9,6 +9,8 @@ import {
   type LoadExtensionsResult,
 } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { PROJECT_COMMAND_CLEANUP_UNCONFIRMED, PROJECT_COMMAND_OUTCOME } from "./project-command-evidence";
 
 const HOST_EXTENSION_NAME = "pi-web-project-command-environment";
 const HOST_EXTENSION_PATH = `<inline:${HOST_EXTENSION_NAME}>`;
@@ -19,7 +21,12 @@ const POWERSHELL_HOST_EXTENSION_PATH = `<inline:${POWERSHELL_HOST_EXTENSION_NAME
 const ABORT_SETTLE_GRACE_MS = 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
-export const PROJECT_COMMAND_CLEANUP_UNCONFIRMED = "pi-web:project-command-cleanup-unconfirmed";
+type ProjectCommandOutcome = { key: string; exitCode?: number; failed: boolean };
+
+function reportDiagnostic(report: () => void): void {
+  try { report(); }
+  catch (error) { console.warn("Could not record project command diagnostic:", error instanceof Error ? error.message : String(error)); }
+}
 
 type ProjectShellSettings = {
   getShellCommandPrefix(): string | undefined;
@@ -29,6 +36,7 @@ type ProjectShellSettings = {
 type ProjectCommandBashOperationsOptions = {
   abortSettleGraceMs?: number;
   onCleanupUnconfirmed?: () => void;
+  commandSource?: { shell: "bash" | "powershell"; record: (outcome: ProjectCommandOutcome) => void };
   agentBinDir?: string;
   baseEnvironment?: NodeJS.ProcessEnv;
   localOperations?: BashOperations;
@@ -101,6 +109,7 @@ export function createProjectCommandBashOperations(
   const {
     abortSettleGraceMs = ABORT_SETTLE_GRACE_MS,
     onCleanupUnconfirmed,
+    commandSource,
     agentBinDir = join(getAgentDir(), "bin"),
     baseEnvironment = process.env,
     localOperations = createLocalBashOperations({ shellPath: options.shellPath }),
@@ -108,7 +117,7 @@ export function createProjectCommandBashOperations(
   } = options;
 
   return {
-    exec(command, cwd, executionOptions) {
+    async exec(command, cwd, executionOptions) {
       const environment = withAgentBinDirectory(
         sanitizeProjectCommandEnvironment(executionOptions.env ?? baseEnvironment, platform),
         agentBinDir,
@@ -116,8 +125,15 @@ export function createProjectCommandBashOperations(
       );
       const { onData, signal, timeout } = executionOptions;
       const canWarnAboutCleanup = platform === "win32" && !signal?.aborted;
+      const record = (result?: BashExecResult) => {
+        if (!commandSource) return;
+        // A successful exact retry can replace the prior outcome, without storing the command again.
+        const key = createHash("sha256").update(JSON.stringify([commandSource.shell, cwd, command])).digest("hex");
+        const exitCode = result?.exitCode;
+        reportDiagnostic(() => commandSource.record({ key, failed: exitCode !== 0, ...(typeof exitCode === "number" ? { exitCode } : {}) }));
+      };
       let released = false;
-      const execution = localOperations.exec(command, cwd, {
+      const execute = async () => localOperations.exec(command, cwd, {
         ...executionOptions,
         env: preventWindowsGitPrompts(environment, platform),
         // Callers finalize their output once the command is released; a
@@ -126,11 +142,21 @@ export function createProjectCommandBashOperations(
           if (!released) onData(data);
         },
       });
+      const execution = execute();
       // Pi rejects any other timeout before it starts the command.
       const timeoutMs = typeof timeout === "number" && Number.isFinite(timeout) && timeout > 0
         ? timeout * 1000
         : undefined;
-      if (!signal && timeoutMs === undefined) return execution;
+      if (!signal && timeoutMs === undefined) {
+        try {
+          const result = await execution;
+          record(result);
+          return result;
+        } catch (error) {
+          record();
+          throw error;
+        }
+      }
 
       // On Stop or a timeout, pi kills the shell's process tree but then keeps
       // reading until every inherited stdout/stderr handle falls idle. A
@@ -148,13 +174,14 @@ export function createProjectCommandBashOperations(
         };
         const rejectAndRelease = (error: unknown) => {
           if (released) return;
+          release();
           // The SDK can settle without verifying detached or reparented children are gone.
           if (canWarnAboutCleanup && error instanceof Error
             && (error.message === "aborted" || error.message.startsWith("timeout:"))) {
-            onCleanupUnconfirmed?.();
-            onData(Buffer.from("\nWindows child-process cleanup could not be confirmed.\n"));
+            if (onCleanupUnconfirmed) reportDiagnostic(onCleanupUnconfirmed);
+            reportDiagnostic(() => onData(Buffer.from("\nWindows child-process cleanup could not be confirmed.\n")));
           }
-          release();
+          if (!(error instanceof Error && error.message === "aborted")) record();
           reject(error);
         };
         const releaseAfter = (delayMs: number, error: Error) => {
@@ -165,7 +192,9 @@ export function createProjectCommandBashOperations(
           releaseAfter(timeoutMs + abortSettleGraceMs, new Error(`timeout:${timeout}`));
         }
         execution.then((result) => {
+          if (released) return;
           release();
+          record(result);
           resolve(result);
         }, rejectAndRelease);
         if (signal?.aborted) onAbort();
@@ -196,6 +225,7 @@ export function createProjectCommandBashExtension(options: {
             commandPrefix: options.settings.getShellCommandPrefix(),
             operations: createProjectCommandBashOperations({
               shellPath: options.settings.getShellPath(),
+              commandSource: { shell: "bash", record: (outcome) => pi.appendEntry(PROJECT_COMMAND_OUTCOME, outcome) },
               onCleanupUnconfirmed: () => pi.appendEntry(PROJECT_COMMAND_CLEANUP_UNCONFIRMED),
             }),
           });
@@ -225,6 +255,7 @@ export function createProjectCommandPowerShellExtension(options: { cwd: string }
           const executionDefinition = createPowerShellToolDefinition(options.cwd, {
             operations: createProjectCommandBashOperations({
               localOperations: createLocalPowerShellOperations(),
+              commandSource: { shell: "powershell", record: (outcome) => pi.appendEntry(PROJECT_COMMAND_OUTCOME, outcome) },
               onCleanupUnconfirmed: () => pi.appendEntry(PROJECT_COMMAND_CLEANUP_UNCONFIRMED),
             }),
           });

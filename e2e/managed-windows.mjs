@@ -14,7 +14,7 @@ console.log('Evidence directory: '+out);
 const logPath=join(out,'managed-browser-server.log');
 writeFileSync(logPath,'',{flag:'wx'});
 const mode=process.argv[2] ?? 'stop';
-assert.ok(['stop','failure','success','t44','restart'].includes(mode), 'Expected stop, failure, success, t44 or restart');
+assert.ok(['stop','failure','success','t44','restart','restart-cleanup'].includes(mode), 'Expected stop, failure, success, t44, restart or restart-cleanup');
 const tmp=mkdtempSync(join(out,'managed-')), agent=join(tmp,'agent'), cwd=join(tmp,'project'), marker=join(cwd,'pid.txt');
 mkdirSync(join(agent,'agents'),{recursive:true}); mkdirSync(cwd);
 writeFileSync(join(cwd,'nested-process.cjs'), "require('node:fs').writeFileSync('nested.pid',String(process.pid));setTimeout(()=>{},65000);");
@@ -31,6 +31,7 @@ assert.ok(!useT44||t44,'Supply PI_WEB_ACCEPTANCE_T44_RUNNER for the isolated, of
 const appCommand=useT44 ? "& node '"+t44+"'; exit $LASTEXITCODE" : {
   stop: '& node nested-process.cjs',
   restart: '& node nested-process.cjs',
+  'restart-cleanup': '& node nested-process.cjs',
   failure: "Write-Output 'fixture-stdout'; [Console]::Error.WriteLine('fixture-stderr'); exit 7",
   success: "& git --version; if ($LASTEXITCODE) { exit $LASTEXITCODE }; & cmd.exe /d /c 'echo managed-cmd'; exit $LASTEXITCODE",
 }[mode];
@@ -71,26 +72,54 @@ try {
    const snap=await api('/api/agent/running'), detail=await api(`/api/sessions/${parent}`);
    if(childRequest&&JSON.stringify(detail.context).includes(reply)&&!snap.runningSessionIds.includes(parent)&&snap.runningSessionIds.includes(row.id)&&snap.subagentsActiveSessionIds.includes(parent))return row.id;
  });
- const entries=readdirSync(join(agent,'sessions'),{recursive:true}).filter(x=>x.endsWith(child+'.jsonl')).flatMap(x=>readFileSync(join(agent,'sessions',x),'utf8').trim().split('\n').map(JSON.parse));
- assert.ok(entries.some(e=>e.customType==='pi-web:subagent'&&e.data.parentSessionId===parent&&e.data.parentToolCallId==='call_managed_acceptance'));
+ const sessionPath=join(agent,'sessions',readdirSync(join(agent,'sessions'),{recursive:true}).find(x=>x.endsWith(child+'.jsonl')));
+ const readEntries=()=>readFileSync(sessionPath,'utf8').trim().split('\n').map(JSON.parse);
+ assert.ok(readEntries().some(e=>e.customType==='pi-web:subagent'&&e.data.parentSessionId===parent&&e.data.parentToolCallId==='call_managed_acceptance'));
  console.log('PASS parent settled while child active and gated; persisted linked JSONL',child);
  release();
  const alive=pid=>{try{process.kill(pid,0);return true;}catch(e){if(e.code==='ESRCH')return false;throw e;}};
- if(mode==='stop'||mode==='restart'){
+ if(mode==='stop'||mode==='restart'||mode==='restart-cleanup'){
    const pid=await retry('live shell PID',()=>{const id=Number(readFileSync(marker,'utf8'));return id>0&&alive(id)&&id;});
    const nested=await retry('live nested PID',()=>{const id=Number(readFileSync(join(cwd,'nested.pid'),'utf8'));return id>0&&alive(id)&&id;});
-   if(mode==='restart'){
+   if(mode==='restart'||mode==='restart-cleanup'){
+     if(mode==='restart-cleanup'){
+       // Freeze the crash image at the real, already-written warning, before any result entry.
+       await api(`/api/agent/${child}`,{type:'abort'});
+       const prefix=await retry('durable cleanup warning',()=>{
+         const boundary=readEntries();
+         const index=boundary.findIndex(e=>e.customType==='pi-web:project-command-cleanup-unconfirmed');
+         return index>0&&boundary.slice(0,index+1);
+       });
+       assert.ok(!prefix.some(e=>e.customType==='pi-web:subagent-result'));
+       const childStopped=()=>!alive(pid)&&!alive(nested);
+       await retry('own shell and nested process exit',childStopped);
+       const exited=once(server,'exit');
+       const killed=spawnSync('taskkill.exe',['/pid',String(server.pid),'/t','/f'],{windowsHide:true,encoding:'utf8',timeout:5000});
+       assert.equal(killed.status,0,killed.stderr); await exited;
+       writeFileSync(sessionPath,prefix.map(entry=>JSON.stringify(entry)).join('\n')+'\n');
+     }else{
      const exited=once(server,'exit');
      const killed=spawnSync('taskkill.exe',['/pid',String(server.pid),'/t','/f'],{windowsHide:true,encoding:'utf8',timeout:5000});
      assert.equal(killed.status,0,killed.stderr); await exited;
+     }
      server=startServer(); connectLogs();
      await retry('orphan status after isolated Next restart',async()=>{
        const row=(await api('/api/sessions')).sessions.find(x=>x.id===child);
        const snap=await api('/api/agent/running');
        return row?.relation?.status==='interrupted'&&!snap.runningSessionIds.includes(child)&&!snap.subagentsActiveSessionIds.includes(parent)&&!alive(pid)&&!alive(nested);
      },40000);
+     if(mode==='restart-cleanup'){
+       const after=await api(`/api/sessions/${child}`);
+       assert.equal(after.info.relation.processCleanupUnconfirmed,true);
+       const {chromium}=await import(pathToFileURL(join(root,'node_modules/playwright/index.mjs')));
+       browser=await chromium.launch({headless:true,timeout:10000});
+       const page=await browser.newPage({locale:'en-US'}); page.setDefaultTimeout(10000);
+       await page.goto(base+'/?session='+parent,{waitUntil:'domcontentloaded',timeout:16000});
+       await page.getByRole('button',{name:/^Agents/i}).first().click();
+       await page.getByRole('option').filter({hasText:task}).getByText(/^(Interrupted · Process cleanup unconfirmed|已中断 · 进程清理未确认|已中斷 · 程序清理未確認)$/i).waitFor();
+       console.log('PASS Agents reads interrupted and cleanup unconfirmed from warning-only crash image after isolated Next restart');
+     }
      console.log('PASS interrupted after actual isolated Next restart; shell and nested PIDs gone:',pid,nested);
-     process.exitCode=0;
    }else{
    const {chromium}=await import(pathToFileURL(join(root,'node_modules/playwright/index.mjs')));
    browser=await chromium.launch({headless:true,timeout:10000});

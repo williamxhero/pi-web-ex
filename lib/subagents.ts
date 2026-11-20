@@ -11,6 +11,7 @@ import { getProjectTrustStatus } from "./project-trust";
 import { disabledBuiltInSubagents } from "./subagent-settings";
 import { PRESET_READ_ONLY } from "./tool-presets";
 import type { SessionEntry, SubagentSessionStatus } from "./types";
+import { PROJECT_COMMAND_CLEANUP_UNCONFIRMED } from "./project-command-evidence";
 
 export const SUBAGENT_META_TYPE = "pi-web:subagent";
 export const SUBAGENT_STATUS_TYPE = "pi-web:subagent-status";
@@ -995,6 +996,9 @@ export function readSubagentRun(entries: readonly SessionEntry[], sessionId: str
     : statusData?.version === 1 && (statusData.status === "queued" || statusData.status === "running")
       ? statusData.status
       : "interrupted";
+  // Process cleanup has no automatic confirmation on retry or resume. The original warning remains applicable.
+  const cleanupUnconfirmed = result?.processCleanupUnconfirmed === true || entries.some((entry) =>
+    entry.type === "custom" && entry.customType === PROJECT_COMMAND_CLEANUP_UNCONFIRMED);
   return {
     sessionId,
     sessionPath,
@@ -1012,7 +1016,7 @@ export function readSubagentRun(entries: readonly SessionEntry[], sessionId: str
     ...(typeof data.worktreePath === "string" ? { worktreePath: data.worktreePath } : {}),
     ...(typeof data.worktreeBranch === "string" ? { worktreeBranch: data.worktreeBranch } : {}),
     ...(result && typeof result.worktreeCleanupError === "string" ? { worktreeCleanupError: result.worktreeCleanupError } : {}),
-    ...(result?.processCleanupUnconfirmed === true ? { processCleanupUnconfirmed: true } : {}),
+    ...(cleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}),
     ...(result && typeof result.worktreeExists === "boolean" ? { worktreeExists: result.worktreeExists } : {}),
   };
 }

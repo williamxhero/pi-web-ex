@@ -46,10 +46,10 @@ import {
   createProjectCommandBashExtension,
   createProjectCommandPowerShellExtension,
   isProjectCommandShellExtension,
-  PROJECT_COMMAND_CLEANUP_UNCONFIRMED,
   preferUserBashExtension,
   preferUserPowerShellExtension,
 } from "./project-command-env";
+import { PROJECT_COMMAND_CLEANUP_UNCONFIRMED, PROJECT_COMMAND_OUTCOME } from "./project-command-evidence";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { SubagentQueue } from "./subagent-queue";
 import { addWorktree, removeWorktree } from "./worktree";
@@ -152,7 +152,7 @@ function lastAssistantStop(sessionManager: { getEntries?: () => unknown }): { ab
   return undefined;
 }
 
-type RunMessage = { role?: unknown; stopReason?: unknown; content?: unknown; toolName?: unknown; isError?: unknown };
+type RunMessage = { role?: unknown; stopReason?: unknown; content?: unknown };
 
 function messageText(message: RunMessage): string {
   if (!Array.isArray(message.content)) return typeof message.content === "string" ? message.content.trim() : "";
@@ -161,7 +161,7 @@ function messageText(message: RunMessage): string {
     .join("").trim();
 }
 
-type RunEntry = { type?: unknown; id?: unknown; targetId?: unknown; replacement?: { content?: unknown } | null; message?: RunMessage; customType?: unknown };
+type RunEntry = { type?: unknown; id?: unknown; targetId?: unknown; replacement?: { content?: unknown } | null; message?: RunMessage; customType?: unknown; data?: unknown };
 
 function unconfirmedCleanup(entries: readonly RunEntry[], from: number): { processCleanupUnconfirmed?: true } {
   return entries.slice(from).some((entry) => entry.type === "custom" && entry.customType === PROJECT_COMMAND_CLEANUP_UNCONFIRMED)
@@ -170,13 +170,16 @@ function unconfirmedCleanup(entries: readonly RunEntry[], from: number): { proce
 }
 
 function managedCommandFailure(entries: readonly RunEntry[], from: number): string | undefined {
+  const seen = new Set<string>();
   for (let i = entries.length - 1; i >= from; i -= 1) {
     const entry = entries[i];
-    if (entry?.type !== "message" || entry.message?.role !== "toolResult" || !entry.message.isError) continue;
-    if (entry.message.toolName !== "bash" && entry.message.toolName !== "powershell") continue;
-    const text = messageText(entry.message);
-    const reason = text.split(/\r?\n/).filter(Boolean).at(-1)?.trim();
-    return reason ? `Project command failed: ${reason.slice(0, 300)}` : "Project command failed. See the command output.";
+    if (entry?.type !== "custom" || entry.customType !== PROJECT_COMMAND_OUTCOME || !entry.data || typeof entry.data !== "object") continue;
+    const { key, failed, exitCode } = entry.data as { key?: unknown; failed?: unknown; exitCode?: unknown };
+    if (typeof key !== "string" || typeof failed !== "boolean" || seen.has(key)) continue;
+    seen.add(key);
+    if (failed) return typeof exitCode === "number"
+      ? `Project command exited with code ${exitCode}. See the command output.`
+      : "Project command failed. See the command output.";
   }
   return undefined;
 }
@@ -1039,7 +1042,6 @@ export function createSubagentController(
       error: undefined,
       // Resume removes no worktree: this run's result says only whether it is still there.
       worktreeCleanupError: undefined,
-      processCleanupUnconfirmed: undefined,
       worktreeExists: undefined,
       resumed: true,
     };
