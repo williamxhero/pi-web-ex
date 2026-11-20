@@ -362,6 +362,14 @@ export function createSubagentExtension(
               onUpdate: update,
                 });
 
+            const initial = latestRun ?? execution.run;
+            if (execution.run.runInBackground && TERMINAL_SUBAGENT_STATUSES.has(initial.status)) {
+              return {
+                content: [{ type: "text", text: subagentFinalText(initial) }],
+                details: subagentToolDetails(initial),
+                ...(initial.status === "failed" ? { isError: true } : {}),
+              };
+            }
             if (execution.run.runInBackground) {
               notifyOnCompletion(execution);
               return {

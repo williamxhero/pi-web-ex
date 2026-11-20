@@ -3593,6 +3593,10 @@ export async function startRpcSession(
   const isSideChat = hasSideMetadata(sessionEntries);
   if (isSideChat && !readSideRelation(sessionEntries)) throw new Error("Invalid side chat metadata");
   const sideChatTools = isSideChat && !chatOnly;
+  // Only carry the policy into a side chat when the inherited branch had it.
+  const inheritsAutomationPolicy = isSideChat && sessionManager.getBranch().some((entry) =>
+    entry.type === "message" && entry.message.role === "system" &&
+    typeof entry.message.content === "string" && entry.message.content.includes(MANAGED_AUTOMATION_POLICY));
   const selectedToolNames = sideChatTools
     ? sideToolNames(pinnedToolNames, sessionManager.getBranch().flatMap((entry) => (
         entry.type === "message" && entry.message.role === "system" ? [entry.message] : []
@@ -3710,7 +3714,7 @@ export async function startRpcSession(
         : chatOnly
           ? { ...CHAT_ONLY_RESOURCE_LOADER_OPTIONS, extensionFactories: [exactSystemPromptExtension] }
         : {
-            ...(isSideChat ? {} : { appendSystemPrompt: [MANAGED_AUTOMATION_POLICY] }),
+            ...(!isSideChat || inheritsAutomationPolicy ? { appendSystemPrompt: [MANAGED_AUTOMATION_POLICY] } : {}),
             extensionFactories: [
               llamaCppExtension,
               ...(builtins?.extensions ?? []),

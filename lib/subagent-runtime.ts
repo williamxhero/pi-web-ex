@@ -590,6 +590,11 @@ function recordResult(sessionManager: SessionManager, run: SubagentRunInfo): Sub
   return recorded;
 }
 
+function reportRunUpdate(request: { onUpdate?: (run: SubagentRunInfo) => void }, run: SubagentRunInfo): void {
+  try { request.onUpdate?.(run); }
+  catch { console.warn("[pi-web] Subagent status observer failed:", run.sessionId, run.status); }
+}
+
 function recordTransitionFailure(manager: SessionManager, stored: StoredSubagentExecution, error: unknown, cleanupError?: string): SubagentRunInfo {
   const result = recordResult(manager, {
     ...stored.run,
@@ -870,7 +875,7 @@ export function createSubagentController(
         dispatchedAt: Date.now(),
       };
       getSubagentRuns().set(initialRun.sessionId, stored);
-      request.onUpdate?.(initialRun);
+      reportRunUpdate(request, initialRun);
       dependencies.invalidateSessionList();
 
       const handleParentAbort = () => {
@@ -896,7 +901,7 @@ export function createSubagentController(
             ...(cleanupError ? { worktreeCleanupError: cleanupError } : {}),
           });
           stored.run = result;
-          request.onUpdate?.(result);
+          reportRunUpdate(request, result);
           getSubagentRuns().delete(initialRun.sessionId);
           dependencies.invalidateSessionList();
           return result;
@@ -950,7 +955,7 @@ export function createSubagentController(
           if (childSession && !childSession.isAlive()) throw new Error(CLOSED_BEFORE_RUN);
           sessionManager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running" });
           stored.run = { ...stored.run, status: "running" };
-          request.onUpdate?.(stored.run);
+          reportRunUpdate(request, stored.run);
           dependencies.invalidateSessionList();
           await prepareChildMcp(childSession, stored);
           await inner.prompt(delegatedTask, { source: "rpc" });
@@ -995,7 +1000,7 @@ export function createSubagentController(
         result = recordResult(sessionManager, { ...result, ...unconfirmedCleanup(sessionManager.getEntries(), runStart),
           ...(evidence?.cleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
         stored.run = result;
-        request.onUpdate?.(result);
+        reportRunUpdate(request, result);
         getSubagentRuns().delete(initialRun.sessionId);
         dependencies.invalidateSessionList();
         return result;
@@ -1015,7 +1020,7 @@ export function createSubagentController(
           const cleanupError = await cleanupWorktree(parent.cwd, isolatedWorktree);
           const finalResult = recordResult(sessionManager, cleanupError ? { ...result, worktreeCleanupError: cleanupError } : result);
           stored.run = finalResult;
-          request.onUpdate?.(finalResult);
+          reportRunUpdate(request, finalResult);
           getSubagentRuns().delete(initialRun.sessionId);
           dependencies.invalidateSessionList();
           resolveCompletion(finalResult);
@@ -1033,7 +1038,7 @@ export function createSubagentController(
             if (state === "queued") {
               sessionManager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "queued" });
             }
-            request.onUpdate?.({ ...stored.run, status: state });
+            reportRunUpdate(request, { ...stored.run, status: state });
             stored.run = { ...stored.run, status: state };
             dependencies.invalidateSessionList();
           },
@@ -1045,7 +1050,7 @@ export function createSubagentController(
         const result = recordTransitionFailure(sessionManager, stored, error, cleanupError);
         dropSubagentRun(initialRun.sessionId, stored);
         dependencies.invalidateSessionList();
-        request.onUpdate?.(result);
+        reportRunUpdate(request, result);
         resolveCompletion(result);
         return { run: result, completion };
       }
@@ -1115,7 +1120,7 @@ export function createSubagentController(
     const stored: StoredSubagentExecution = { run: initialRun, completion, abortRequested: false, dispatchedAt: Date.now() };
     unsavedSubagentResults.delete(request.sessionId);
     getSubagentRuns().set(request.sessionId, stored);
-    request.onUpdate?.(initialRun);
+    reportRunUpdate(request, initialRun);
     dependencies.invalidateSessionList();
     const handleParentAbort = () => {
       stored.abortRequested = true;
@@ -1145,7 +1150,7 @@ export function createSubagentController(
         manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running",
           ...(initialRun.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
         stored.run = { ...stored.run, status: "running" };
-        request.onUpdate?.(stored.run);
+        reportRunUpdate(request, stored.run);
         beginProjectCommandRun(manager);
         await prepareChildMcp(wrapper, stored);
         await wrapper!.inner.prompt(request.task, { source: "rpc" });
@@ -1177,7 +1182,7 @@ export function createSubagentController(
       result = recordResult(manager, { ...result, ...unconfirmedCleanup(manager.getEntries(), runStart),
         ...(evidence?.cleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
       stored.run = result;
-      request.onUpdate?.(result);
+      reportRunUpdate(request, result);
       getSubagentRuns().delete(request.sessionId);
       dependencies.invalidateSessionList();
       return result;
@@ -1194,7 +1199,7 @@ export function createSubagentController(
       try {
         const result = recordResult(manager, { ...initialRun, status: "aborted", completedAt: new Date().toISOString() });
         stored.run = result;
-        request.onUpdate?.(result);
+        reportRunUpdate(request, result);
         getSubagentRuns().delete(request.sessionId);
         dependencies.invalidateSessionList();
         resolveCompletion(result);
@@ -1208,7 +1213,7 @@ export function createSubagentController(
         if (state === "queued") manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "queued",
           ...(initialRun.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
         stored.run = { ...stored.run, status: state };
-        request.onUpdate?.(stored.run);
+        reportRunUpdate(request, stored.run);
         dependencies.invalidateSessionList();
       }, finishQueuedAbort);
     } catch (error) {
@@ -1216,7 +1221,7 @@ export function createSubagentController(
       const result = recordTransitionFailure(manager, stored, error);
       dropSubagentRun(request.sessionId, stored);
       dependencies.invalidateSessionList();
-      request.onUpdate?.(result);
+      reportRunUpdate(request, result);
       resolveCompletion(result);
       return { run: result, completion };
     }

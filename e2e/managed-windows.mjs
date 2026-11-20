@@ -213,6 +213,16 @@ try {
  release();await browser?.close();
  if(sentinel?.pid&&sentinel.exitCode===null&&sentinel.signalCode===null){const done=once(sentinel,'exit');sentinel.kill();await done;}
  authServer?.closeAllConnections();authServer?.close();
- if(server?.pid&&server.exitCode===null)spawnSync('taskkill.exe',['/pid',String(server.pid),'/t','/f'],{windowsHide:true,stdio:'ignore',timeout:5000});
- model.closeAllConnections();model.close();log.end();rmSync(tmp,{recursive:true,force:true,maxRetries:4,retryDelay:200});
+ let cleanupError;
+ if(server?.pid&&server.exitCode===null&&server.signalCode===null){
+   const exited=once(server,'exit');
+   const killed=spawnSync('taskkill.exe',['/pid',String(server.pid),'/t','/f'],{windowsHide:true,encoding:'utf8',timeout:5000});
+   log.write(`Final server stop: exit=${killed.status ?? 'none'}\n${killed.stdout ?? ''}${killed.stderr ?? ''}`);
+   if(killed.status!==0)cleanupError=new Error(`Could not confirm isolated server cleanup: exit ${killed.status ?? 'unknown'}`);
+   else if(!await Promise.race([exited.then(()=>true),delay(7000,false,{ref:false})]))cleanupError=new Error('Timed out waiting for isolated server exit');
+ }
+ model.closeAllConnections();model.close();
+ await new Promise((resolve,reject)=>{log.once('error',reject);log.end(resolve);});
+ if(cleanupError)throw cleanupError;
+ rmSync(tmp,{recursive:true,force:true,maxRetries:4,retryDelay:200});
 }

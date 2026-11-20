@@ -147,9 +147,17 @@ try {
     [IO.File]::WriteAllText($base+'.stderr.txt',$stderr.Result)
   }
 }finally{
-  & logman.exe stop $session -ets | Out-Null
+  for($i=0;$i -lt 4;$i++){
+    & logman.exe stop $session -ets | Out-Null
+    if($LASTEXITCODE -eq 0){break}
+    Start-Sleep -Milliseconds 350
+  }
   if($LASTEXITCODE){throw 'Kernel process ETW stop failed; do not use this trace'}
 }
+& tracerpt.exe $etl -summary ($base+'.etw-integrity.txt') -o NUL -of CSV -y | Out-Null
+$loss=Select-String -LiteralPath ($base+'.etw-integrity.txt') -Pattern 'Total Events\s+Lost\s+(\d+)' | Select-Object -First 1
+if($LASTEXITCODE -or -not $loss){throw 'Kernel process ETW integrity unavailable'}
+$lost=[int]$loss.Matches[0].Groups[1].Value
 $fromSeq=@{}; $byPid=@{}; $ended=@{}
 foreach($rec in (Get-WinEvent -Path $etl -Oldest)){
   if($rec.Id -notin 1,2 -or $rec.ProviderName -ne 'Microsoft-Windows-Kernel-Process'){continue}
@@ -197,6 +205,12 @@ $rows=@(foreach($w in $win){
 })
 $rows | Export-Csv -NoTypeInformation -Encoding utf8 ($base+'.windows.csv')
 $owned | Sort-Object Start | Export-Csv -NoTypeInformation -Encoding utf8 ($base+'.owned.csv')
+$browserStarts=@(foreach($item in $fromSeq.Values){
+  if($item.Start -lt $startBefore -or $item.Name -notmatch $browserPattern){continue}
+  $source=Resolve-Chain $item
+  [pscustomobject]@{At=[datetime]::FromFileTimeUtc($item.Start).ToString('o');Name=$item.Name;Pid=$item.Pid;Sequence=$item.Sequence;Parent=$item.Parent;ParentSequence=$item.ParentSequence;Source=$source.Source;Chain=$source.Chain}
+})
+$browserStarts | Sort-Object At | Export-Csv -NoTypeInformation -Encoding utf8 ($base+'.browser-starts.csv')
 $browserAfter=Get-BrowserInstances
 [pscustomobject]@{Before=@($browserBefore);After=@($browserAfter)} | ConvertTo-Json -Depth 4 | Out-File ($base+'.browsers.json') -Encoding utf8
 $summary=[ordered]@{
@@ -209,11 +223,14 @@ $summary=[ordered]@{
   OwnedTaskbarFlash=@($rows|Where-Object {$_.Source -eq 'owned' -and $_.Edge -eq 'taskbar-flash'}).Count
   OwnedNoExit=@($owned|Where-Object End -eq ([long]::MaxValue)).Count
   BrowserProcesses=@($owned|Where-Object Name -match '^(chrome|msedge|firefox|brave|opera|chromium|webkit|headless_shell|chrome-headless-shell)\.exe$'|Group-Object Name|ForEach-Object {"$($_.Name):$($_.Count)"})
-  UnexpectedBrowserStarts=@($owned|Where-Object Name -match '^(chrome|msedge|firefox|brave|opera|chromium|webkit)\.exe$').Count
+  EtwLost=$lost
+  UnexpectedBrowserStarts=$browserStarts.Count
+  OutsideTaskBrowserStarts=@($browserStarts | Where-Object Source -ne 'owned').Count
   BrowserWindowEvents=@($rows|Where-Object {$_.Class -match '^(Chrome_WidgetWin_|MozillaWindowClass|WebKit)' -and $_.Edge -in 'visible','focus'}).Count
 }
 $summary | ConvertTo-Json | Out-File ($base+'.summary.json') -Encoding utf8
 $summary | ConvertTo-Json -Compress
+if($lost){exit 13}
 if($p.ExitCode -ne 0){exit $p.ExitCode}
 if($Control){if(-not $summary.OwnedVisible -or -not $summary.OwnedFocus){exit 11}}
 elseif($TaskbarControl){if(-not $summary.OwnedTaskbarAdd -or -not $summary.OwnedTaskbarFlash){exit 11}}
