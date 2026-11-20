@@ -278,6 +278,7 @@ export function createSubagentExtension(
           "Use Agent for a focused task that benefits from an isolated context.",
           "Use multiple background Agent calls in the same response for independent parallel work.",
           "Do not duplicate work already delegated to a running subagent.",
+          "Use Pi Web's managed Agent for independent delegation. If dispatch is unavailable or fails, do not launch a separate Pi or another unmanaged agent. Run a suitable short command in this session and wait for it only if the current tools permit it; otherwise report that delegation could not start.",
         ],
         executionMode: "parallel",
         parameters: Type.Object({
@@ -381,7 +382,7 @@ export function createSubagentExtension(
             };
           } catch (error) {
             return {
-              content: [{ type: "text", text: withSubagentCandidates(error instanceof Error ? error.message : String(error), ctx?.sessionManager) }],
+              content: [{ type: "text", text: `${withSubagentCandidates(error instanceof Error ? error.message : String(error), ctx?.sessionManager)}\nDo not launch a separate Pi or other unmanaged agent. If a short command can do the work with the current tools, run it here and wait for it; otherwise report the delegation failure.` }],
               details: undefined,
               isError: true,
             };

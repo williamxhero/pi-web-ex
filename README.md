@@ -9,4 +9,6 @@
 
 自动续跑的监督逻辑由独立插件提供，本库负责显示状态和转发按钮操作。
 
+独立后台任务请使用 Pi Web 的受管 `Agent`，从父会话的 **Agents** 查看或停止子任务；派发失败时不要另启 Pi。参见[受管委托与 Windows 自动化指南](docs/agents/subagents.md#managed-delegation-operator-and-agent-guide)。
+
 Pi Web 的安装、配置和基础功能见[上游中文 README](https://github.com/williamxhero/pi-web-ex/blob/main/docs/README.zh-CN.md)。

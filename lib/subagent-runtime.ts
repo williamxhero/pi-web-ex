@@ -715,16 +715,6 @@ export function createSubagentController(
         ...(thinking ? { thinkingLevel: thinking as ThinkingLevel } : {}),
         ...subagentToolOptions({ tools: activeTools, allExtensionTools, mcp: mcpEnabled }),
       });
-      persistChildSession(sessionManager);
-      skillsBinding.setActiveToolsGetter(() => inner.getActiveToolNames());
-      const childSession = dependencies.registerSession(inner, {
-        ...(skillsBinding.getExactSystemPrompt !== undefined
-          ? { exactSystemPrompt: skillsBinding.getExactSystemPrompt }
-          : {}),
-        chatOnly,
-        ...(mcp?.mcpHost ? { mcpHost: mcp.mcpHost } : {}),
-      });
-
       const initialRun: SubagentRunInfo = {
         sessionId: inner.sessionId,
         sessionPath: inner.sessionFile ?? sessionManager.getSessionFile() ?? "",
@@ -738,6 +728,48 @@ export function createSubagentController(
         createdAt,
         ...(isolatedWorktree ? { worktreePath: isolatedWorktree.path, worktreeBranch: isolatedWorktree.branch } : {}),
       };
+
+      let childSession: HostSession | void;
+      let persisted = false;
+      try {
+        persistChildSession(sessionManager);
+        persisted = true;
+        skillsBinding.setActiveToolsGetter(() => inner.getActiveToolNames());
+        childSession = dependencies.registerSession(inner, {
+          ...(skillsBinding.getExactSystemPrompt !== undefined
+            ? { exactSystemPrompt: skillsBinding.getExactSystemPrompt }
+            : {}),
+          chatOnly,
+          ...(mcp?.mcpHost ? { mcpHost: mcp.mcpHost } : {}),
+        });
+      } catch (error) {
+        inner.dispose();
+        mcp?.mcpHost?.dispose();
+        const worktreePath = isolatedWorktree?.path;
+        const cleanupError = await cleanupWorktree(parent.cwd, isolatedWorktree);
+        isolatedWorktree = undefined;
+        if (persisted) {
+          // No worker was queued. Keep the persisted attempt as a failure, not an orphaned run.
+          try {
+            recordResult(sessionManager, {
+              ...initialRun,
+              status: "failed",
+              completedAt: new Date().toISOString(),
+              error: error instanceof Error ? error.message : String(error),
+              ...(cleanupError ? { worktreeCleanupError: cleanupError } : {}),
+            });
+          } catch (recordError) {
+            console.error("[pi-web] failed to record subagent registration failure:", recordError);
+          } finally {
+            dependencies.invalidateSessionList();
+          }
+        }
+        if (cleanupError) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`${message}\nCould not clean up the worktree at ${worktreePath}; inspect it before removing it.`, { cause: error });
+        }
+        throw error;
+      }
 
       let resolveCompletion!: (run: SubagentRunInfo) => void;
       const completion = new Promise<SubagentRunInfo>((resolve) => { resolveCompletion = resolve; });
