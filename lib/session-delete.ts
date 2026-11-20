@@ -29,6 +29,7 @@ import { sessionPathKey } from "./session-path";
 import { forgetSessionUiState } from "./session-ui-state";
 import { readSubagentRun, SUBAGENT_META_TYPE } from "./subagents";
 import { readSideRelation } from "./side-session";
+import { forgetUnsavedSubagentResult } from "./subagent-runtime";
 import type { SessionEntry } from "./types";
 
 /** Most ids one POST /api/sessions/delete takes; the sidebar sends a bigger project in parts. */
@@ -245,6 +246,7 @@ export async function deleteSessions(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    forgetUnsavedSubagentResult(deletedId);
     invalidateSessionPathCache(deletedId);
     invalidateSessionManagerCache(deletedPath);
   }

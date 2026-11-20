@@ -457,8 +457,17 @@ export function getLiveSubagentStatus(sessionId: string): SubagentRunInfo["statu
 const MAX_UNSAVED_SUBAGENT_RESULTS = 128;
 const unsavedSubagentResults = new Map<string, SubagentRunInfo>();
 
+export function forgetUnsavedSubagentResult(sessionId: string): void {
+  unsavedSubagentResults.delete(sessionId);
+}
+
 export function getUnsavedSubagentResult(sessionId: string): SubagentRunInfo | undefined {
-  return unsavedSubagentResults.get(sessionId);
+  const result = unsavedSubagentResults.get(sessionId);
+  if (result && !existsSync(result.sessionPath)) {
+    forgetUnsavedSubagentResult(sessionId);
+    return undefined;
+  }
+  return result;
 }
 
 function findSubagentModel(runtime: ModelRuntime, reference: string) {
@@ -579,6 +588,18 @@ function recordResult(sessionManager: SessionManager, run: SubagentRunInfo): Sub
     console.warn("[pi-web] Could not persist subagent result; retained in this server only:", run.sessionId);
   }
   return recorded;
+}
+
+function recordTransitionFailure(manager: SessionManager, stored: StoredSubagentExecution, error: unknown, cleanupError?: string): SubagentRunInfo {
+  const result = recordResult(manager, {
+    ...stored.run,
+    status: "failed",
+    completedAt: new Date().toISOString(),
+    error: error instanceof Error ? error.message : String(error),
+    ...(cleanupError ? { worktreeCleanupError: cleanupError } : {}),
+  });
+  stored.run = result;
+  return result;
 }
 
 export function createSubagentController(
@@ -880,10 +901,6 @@ export function createSubagentController(
           dependencies.invalidateSessionList();
           return result;
         }
-        stored.run = { ...stored.run, status: "running" };
-        sessionManager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running" });
-        request.onUpdate?.(stored.run);
-        dependencies.invalidateSessionList();
         let turnCount = 0;
         let maxTurnsReached = false;
         let undelivered: string[] = [];
@@ -931,6 +948,10 @@ export function createSubagentController(
         let evidence: ReturnType<typeof takeProjectCommandRun>;
         try {
           if (childSession && !childSession.isAlive()) throw new Error(CLOSED_BEFORE_RUN);
+          sessionManager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running" });
+          stored.run = { ...stored.run, status: "running" };
+          request.onUpdate?.(stored.run);
+          dependencies.invalidateSessionList();
           await prepareChildMcp(childSession, stored);
           await inner.prompt(delegatedTask, { source: "rpc" });
           evidence = takeProjectCommandRun(sessionManager);
@@ -1020,8 +1041,13 @@ export function createSubagentController(
         );
       } catch (error) {
         request.signal?.removeEventListener("abort", handleParentAbort);
-        if (dropSubagentRun(initialRun.sessionId, stored)) dependencies.invalidateSessionList();
-        throw error;
+        const cleanupError = await cleanupWorktree(parent.cwd, isolatedWorktree);
+        const result = recordTransitionFailure(sessionManager, stored, error, cleanupError);
+        dropSubagentRun(initialRun.sessionId, stored);
+        dependencies.invalidateSessionList();
+        request.onUpdate?.(result);
+        resolveCompletion(result);
+        return { run: result, completion };
       }
       stored.cancelQueued = queued.cancel;
       if (stored.abortRequested) queued.cancel();
@@ -1187,8 +1213,12 @@ export function createSubagentController(
       }, finishQueuedAbort);
     } catch (error) {
       request.signal?.removeEventListener("abort", handleParentAbort);
-      if (dropSubagentRun(request.sessionId, stored)) dependencies.invalidateSessionList();
-      throw error;
+      const result = recordTransitionFailure(manager, stored, error);
+      dropSubagentRun(request.sessionId, stored);
+      dependencies.invalidateSessionList();
+      request.onUpdate?.(result);
+      resolveCompletion(result);
+      return { run: result, completion };
     }
     stored.cancelQueued = queued.cancel;
     if (stored.abortRequested) queued.cancel();

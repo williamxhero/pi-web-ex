@@ -27,8 +27,7 @@ let release; const gate=new Promise(r=>release=r);
 let delegated=false, childRequest=false, server, browser, sentinel, authServer;
 let interactionCommand, authRequests=0, unauthorized=0, disabledChecked=false, parentPolicyLoaded=false;
 const useT44=mode==='t44';
-const t44=process.env.PI_WEB_ACCEPTANCE_T44_RUNNER?.replaceAll("'","''");
-assert.ok(!useT44||t44,'Supply PI_WEB_ACCEPTANCE_T44_RUNNER for the isolated, offline T44 runner');
+const t44=join(root,'e2e','pi-nf-t44.mjs').replaceAll("'","''");
 const appCommand=useT44 ? "& node '"+t44+"'; exit $LASTEXITCODE" : {
   stop: '& node nested-process.cjs',
   restart: '& node nested-process.cjs',
@@ -74,7 +73,7 @@ try {
  json('models.json',{providers:{acceptance:{baseUrl:`http://127.0.0.1:${modelPort}/v1`,api:'openai-completions',apiKey:'ONLY_A_LOCAL_PLACEHOLDER',models:[{id:'fixture'}]}}});
  const probe=createServer(), port=await listen(probe);await new Promise(r=>probe.close(r));
  assert.equal(process.platform,'win32');
- const startServer=()=>spawn(process.execPath,[join(root,'node_modules/next/dist/bin/next'),'dev','-H','127.0.0.1','-p',String(port)],{cwd:root,windowsHide:true,env:{...Object.fromEntries(Object.entries(process.env).filter(([k])=>/^(path|pathext|systemroot|windir|comspec|programfiles.*|programdata|localappdata|appdata|userprofile|home|temp|tmp|os|systemdrive|playwright_browsers_path)$/i.test(k))),PI_CODING_AGENT_DIR:agent,PI_WEB_PASSWORD:'',NEXT_TELEMETRY_DISABLED:'1'},stdio:['ignore','pipe','pipe']});
+ const startServer=()=>spawn(process.execPath,[join(root,'node_modules/next/dist/bin/next'),'dev','-H','127.0.0.1','-p',String(port)],{cwd:root,windowsHide:true,env:{...Object.fromEntries(Object.entries(process.env).filter(([k])=>/^(path|pathext|systemroot|windir|comspec|programfiles.*|programdata|localappdata|appdata|userprofile|home|temp|tmp|os|systemdrive|playwright_browsers_path|pi_web_t44_(copy|pi_host|skill_root|evidence|path))$/i.test(k))),PI_CODING_AGENT_DIR:agent,PI_WEB_PASSWORD:'',NEXT_TELEMETRY_DISABLED:'1'},stdio:['ignore','pipe','pipe']});
  const connectLogs=()=>{server.stdout.pipe(log,{end:false});server.stderr.pipe(log,{end:false});};
  server=startServer(); connectLogs();
  const base=`http://127.0.0.1:${port}`;
