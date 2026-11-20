@@ -10,7 +10,7 @@ const root=process.cwd(), out=process.env.PI_WEB_ACCEPTANCE_OUTPUT;
 assert.ok(out, 'Set PI_WEB_ACCEPTANCE_OUTPUT to a new evidence directory');
 mkdirSync(out,{recursive:true});
 const mode=process.argv[2] ?? 'stop';
-assert.ok(['stop','failure','success','t44'].includes(mode), 'Expected stop, failure, success or t44');
+assert.ok(['stop','failure','success','t44','restart'].includes(mode), 'Expected stop, failure, success, t44 or restart');
 const tmp=mkdtempSync(join(out,'managed-')), agent=join(tmp,'agent'), cwd=join(tmp,'project'), marker=join(cwd,'pid.txt');
 mkdirSync(join(agent,'agents'),{recursive:true}); mkdirSync(cwd);
 writeFileSync(join(cwd,'nested-process.cjs'), "require('node:fs').writeFileSync('nested.pid',String(process.pid));setTimeout(()=>{},65000);");
@@ -26,6 +26,7 @@ const t44=process.env.PI_WEB_ACCEPTANCE_T44_RUNNER?.replaceAll("'","''");
 assert.ok(!useT44||t44,'Supply PI_WEB_ACCEPTANCE_T44_RUNNER for the isolated, offline T44 runner');
 const appCommand=useT44 ? "& node '"+t44+"'; exit $LASTEXITCODE" : {
   stop: '& node nested-process.cjs',
+  restart: '& node nested-process.cjs',
   failure: "Write-Output 'fixture-stdout'; [Console]::Error.WriteLine('fixture-stderr'); exit 7",
   success: "& git --version; if ($LASTEXITCODE) { exit $LASTEXITCODE }; & cmd.exe /d /c 'echo managed-cmd'; exit $LASTEXITCODE",
 }[mode];
@@ -52,8 +53,9 @@ try {
  json('models.json',{providers:{acceptance:{baseUrl:`http://127.0.0.1:${modelPort}/v1`,api:'openai-completions',apiKey:'ONLY_A_LOCAL_PLACEHOLDER',models:[{id:'fixture'}]}}});
  const probe=createServer(), port=await listen(probe);await new Promise(r=>probe.close(r));
  assert.equal(process.platform,'win32');
- server=spawn(process.execPath,[join(root,'node_modules/next/dist/bin/next'),'dev','-H','127.0.0.1','-p',String(port)],{cwd:root,windowsHide:true,env:{...Object.fromEntries(Object.entries(process.env).filter(([k])=>/^(path|pathext|systemroot|windir|comspec|programfiles.*|programdata|localappdata|appdata|userprofile|home|temp|tmp|os|systemdrive|playwright_browsers_path)$/i.test(k))),PI_CODING_AGENT_DIR:agent,PI_WEB_PASSWORD:'',NEXT_TELEMETRY_DISABLED:'1'},stdio:['ignore','pipe','pipe']});
- server.stdout.pipe(log,{end:false});server.stderr.pipe(log,{end:false});
+ const startServer=()=>spawn(process.execPath,[join(root,'node_modules/next/dist/bin/next'),'dev','-H','127.0.0.1','-p',String(port)],{cwd:root,windowsHide:true,env:{...Object.fromEntries(Object.entries(process.env).filter(([k])=>/^(path|pathext|systemroot|windir|comspec|programfiles.*|programdata|localappdata|appdata|userprofile|home|temp|tmp|os|systemdrive|playwright_browsers_path)$/i.test(k))),PI_CODING_AGENT_DIR:agent,PI_WEB_PASSWORD:'',NEXT_TELEMETRY_DISABLED:'1'},stdio:['ignore','pipe','pipe']});
+ const connectLogs=()=>{server.stdout.pipe(log,{end:false});server.stderr.pipe(log,{end:false});};
+ server=startServer(); connectLogs();
  const base=`http://127.0.0.1:${port}`;
  const api=async(path,body)=>{const res=await fetch(base+path,{signal:AbortSignal.timeout(8000),...(body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}:{})});const text=await res.text();assert.ok(res.ok,`${path}: ${res.status} ${text.slice(0,500)}`);return JSON.parse(text);};
  await retry('isolated server ready',async()=>{if(server&&server.exitCode!==null) throw Error('Next exited '+server.exitCode);assert.deepEqual((await api('/api/sessions')).sessions,[]);return true;},40000);
@@ -70,9 +72,22 @@ try {
  console.log('PASS parent settled while child active and gated; persisted linked JSONL',child);
  release();
  const alive=pid=>{try{process.kill(pid,0);return true;}catch(e){if(e.code==='ESRCH')return false;throw e;}};
- if(mode==='stop'){
+ if(mode==='stop'||mode==='restart'){
    const pid=await retry('live shell PID',()=>{const id=Number(readFileSync(marker,'utf8'));return id>0&&alive(id)&&id;});
    const nested=await retry('live nested PID',()=>{const id=Number(readFileSync(join(cwd,'nested.pid'),'utf8'));return id>0&&alive(id)&&id;});
+   if(mode==='restart'){
+     const exited=once(server,'exit');
+     const killed=spawnSync('taskkill.exe',['/pid',String(server.pid),'/t','/f'],{windowsHide:true,encoding:'utf8',timeout:5000});
+     assert.equal(killed.status,0,killed.stderr); await exited;
+     server=startServer(); connectLogs();
+     await retry('orphan status after isolated Next restart',async()=>{
+       const row=(await api('/api/sessions')).sessions.find(x=>x.id===child);
+       const snap=await api('/api/agent/running');
+       return row?.relation?.status==='interrupted'&&!snap.runningSessionIds.includes(child)&&!snap.subagentsActiveSessionIds.includes(parent)&&!alive(pid)&&!alive(nested);
+     },40000);
+     console.log('PASS interrupted after actual isolated Next restart; shell and nested PIDs gone:',pid,nested);
+     process.exitCode=0;
+   }else{
    const {chromium}=await import(pathToFileURL(join(root,'node_modules/playwright/index.mjs')));
    browser=await chromium.launch({headless:true,timeout:10000});
    const page=await browser.newPage({locale:'en-US'});page.setDefaultTimeout(10000);
@@ -90,6 +105,7 @@ try {
      return row?.relation?.status==='aborted'&&!snap.runningSessionIds.includes(child)&&!snap.subagentsActiveSessionIds.includes(parent)&&!alive(pid)&&!alive(nested);
    });
    console.log('PASS Agents reload and browser Stop; shell and nested PIDs exited:',pid,nested);
+   }
  }else{
    const final=await retry('managed command completed',async()=>{
      const row=(await api('/api/sessions')).sessions.find(x=>x.id===child);

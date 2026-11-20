@@ -23,7 +23,7 @@ $env:PI_WEB_ACCEPTANCE_OUTPUT = "$evidence/project-logs"
 if ($LASTEXITCODE) { throw 'Console positive control did not pass' }
 & powershell.exe -NoProfile -File e2e/windows-desktop-trace.ps1 -TaskbarControl -OutputDirectory "$evidence/taskbar-control"
 if ($LASTEXITCODE) { throw 'Taskbar positive control did not pass' }
-foreach ($mode in 'success','failure','stop') {
+foreach ($mode in 'success','failure','stop','restart') {
   & powershell.exe -NoProfile -File e2e/windows-desktop-trace.ps1 -Executable $node -Arguments "e2e/managed-windows.mjs $mode" -OutputDirectory "$evidence/$mode"
   if ($LASTEXITCODE) { throw "Acceptance failed: $mode" }
 }
@@ -47,9 +47,10 @@ Windows logged-in desktop, Next 16.4.6, runtime candidate `d1dc46fe916120c02f060
 | Ordinary project: success | Managed PowerShell → Git/CMD; both outputs persisted; no browser process | 0 | 0 | 0 |
 | Ordinary project: failure | Both streams and exit 7 in the child transcript; no browser process | 0 | 0 | 0 |
 | Ordinary project: Stop | Parent idle; child visible after reload; browser Stop killed the shell and nested Node; headless browser was the test driver | 0 | 0 | 0 |
+| Isolated Next restart | A live child read back as interrupted, not active; shell and its Node descendant had exited | 0 | 0 | 0 |
 | T44 sample | Selected regression 1/1 passed; exit 0 persisted; 2,813 Git processes, no browser process | 0 | 0 | 0 |
 
-An independent earlier T44 capture counted 2,845 Git starts, zero attributed show/focus events and no unmatched console events; it attributed 135 shows and 134 focus events to a concurrent, unrelated NF run. The versioned experiment above rechecked the ordinary project and T44 using the reusable probe. The shell-hook rerun saw zero attributed taskbar additions or flashes across the ordinary project and T44. The ordinary-project runs also passed the browser check (only the intentional headless test driver started in the Stop case). In the latest T44 run the selected case and taskbar checks passed and no browser process started, but the probe recorded 12 show/focus events in two pre-existing browser processes. The before/after browser instance inventory did not change. Those events lack causal attribution, so the full T44 browser-activation gate remains open pending a browser-quiescent logged-in desktop. This evidence does not include a fresh server-restart run.
+An independent earlier T44 capture counted 2,845 Git starts, zero attributed show/focus events and no unmatched console events; it attributed 135 shows and 134 focus events to a concurrent, unrelated NF run. The versioned experiment above rechecked the ordinary project and T44 using the reusable probe. The shell-hook rerun saw zero attributed taskbar additions or flashes across the ordinary project and T44. The ordinary-project runs also passed the browser check (only the intentional headless test driver started in the Stop case). In the latest T44 run the selected case and taskbar checks passed and no browser process started, but the probe recorded 12 show/focus events in two pre-existing browser processes. The before/after browser instance inventory did not change. Those events lack causal attribution, so the full T44 browser-activation gate remains open pending a browser-quiescent logged-in desktop. The restart used only the probe's own Next process tree and reused its isolated session directory.
 
 The following artifact names refer to sanitized local acceptance summaries; binary ETL and raw desktop metadata stay out of Git:
 
@@ -59,4 +60,5 @@ The following artifact names refer to sanitized local acceptance summaries; bina
 | `shell-hook-success-1` | `BA0AF160AC67B8EA4DB28C107704ACF2E56A894D8A5C809646048E43ED2E69D8` |
 | `shell-hook-failure-1` | `EF77F26A112753DAC8034FF6194961BEE4848512231DA16A03F1029E57212FDC` |
 | `shell-hook-stop-1` | `C3A8EDE1BFAAFE6870FB29D81278B4A69538FA68D881B9446EF7B8D9594C6FC1` |
+| `shell-hook-restart-1` | `FDA21DA6B69E50F318DD6535FF1ADD5A0B408725FB8EF536D788722C9C77E6E4` |
 | `shell-hook-t44-quiet-slot` (T44 case passes; browser gate exits 12) | `38D6847E4493337329B0601A8C49D3C20EDAA6C28F2C51B27130D577E55A1BEF` |
