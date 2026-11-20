@@ -129,6 +129,7 @@ export interface SubagentToolDetails {
   worktreePath?: string;
   worktreeBranch?: string;
   worktreeCleanupError?: string;
+  processCleanupUnconfirmed?: true;
 }
 
 export interface StartSubagentRequest {
@@ -195,6 +196,7 @@ export function subagentToolDetails(run: SubagentRunInfo): SubagentToolDetails {
     createdAt: run.createdAt,
     ...(run.completedAt ? { completedAt: run.completedAt } : {}),
     ...(run.error ? { error: run.error } : {}),
+    ...(run.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}),
     ...(run.worktreePath ? { worktreePath: run.worktreePath } : {}),
     ...(run.worktreeBranch ? { worktreeBranch: run.worktreeBranch } : {}),
     ...(run.worktreeCleanupError ? { worktreeCleanupError: run.worktreeCleanupError } : {}),
@@ -223,7 +225,8 @@ export function subagentFinalText(run: SubagentRunInfo): string {
   // Keep the session ID in the text: the model only sees `content`, never `details`, and needs it for `resume` / `get_subagent_result`.
   // The worktree line follows the status, before the subagent's own words.
   const worktree = worktreeOutcomeText(run);
-  const withWorktree = (status: string) => worktree ? `${status}\n\n${worktree}` : status;
+  const cleanup = run.processCleanupUnconfirmed ? "Windows child-process cleanup could not be confirmed." : undefined;
+  const withWorktree = (status: string) => [status, cleanup, worktree].filter(Boolean).join("\n\n");
   if (run.status === "completed") {
     const result = run.result?.trim();
     return result

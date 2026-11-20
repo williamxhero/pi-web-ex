@@ -6,9 +6,13 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,readdirSync,rmSync,crea
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
-const root=process.cwd(), out=process.env.PI_WEB_ACCEPTANCE_OUTPUT;
-assert.ok(out, 'Set PI_WEB_ACCEPTANCE_OUTPUT to a new evidence directory');
-mkdirSync(out,{recursive:true});
+const root=process.cwd(), outputRoot=process.env.PI_WEB_ACCEPTANCE_OUTPUT;
+assert.ok(outputRoot, 'Set PI_WEB_ACCEPTANCE_OUTPUT to an evidence root');
+mkdirSync(outputRoot,{recursive:true});
+const out=mkdtempSync(join(outputRoot,'run-'));
+console.log('Evidence directory: '+out);
+const logPath=join(out,'managed-browser-server.log');
+writeFileSync(logPath,'',{flag:'wx'});
 const mode=process.argv[2] ?? 'stop';
 assert.ok(['stop','failure','success','t44','restart'].includes(mode), 'Expected stop, failure, success, t44 or restart');
 const tmp=mkdtempSync(join(out,'managed-')), agent=join(tmp,'agent'), cwd=join(tmp,'project'), marker=join(cwd,'pid.txt');
@@ -31,7 +35,7 @@ const appCommand=useT44 ? "& node '"+t44+"'; exit $LASTEXITCODE" : {
   success: "& git --version; if ($LASTEXITCODE) { exit $LASTEXITCODE }; & cmd.exe /d /c 'echo managed-cmd'; exit $LASTEXITCODE",
 }[mode];
 const tool=(id,name,args)=>({index:0,id,type:'function',function:{name,arguments:JSON.stringify(args)}});
-const log=createWriteStream(join(out,'managed-browser-server.log'));
+const log=createWriteStream(logPath,{flags:'a'});
 const model=createServer(async(req,res)=>{
   try {
     let body=''; for await(const chunk of req) body+=chunk;
@@ -102,9 +106,14 @@ try {
    await page.getByTitle(/^(Stop agent|停止 Agent)$/i).click();
    await retry('cancelled child and both owned processes gone',async()=>{
      const row=(await api('/api/sessions')).sessions.find(x=>x.id===child), snap=await api('/api/agent/running');
-     return row?.relation?.status==='aborted'&&!snap.runningSessionIds.includes(child)&&!snap.subagentsActiveSessionIds.includes(parent)&&!alive(pid)&&!alive(nested);
+     return row?.relation?.status==='aborted'&&row.relation.processCleanupUnconfirmed===true&&!snap.runningSessionIds.includes(child)&&!snap.subagentsActiveSessionIds.includes(parent)&&!alive(pid)&&!alive(nested);
    });
-   console.log('PASS Agents reload and browser Stop; shell and nested PIDs exited:',pid,nested);
+   const afterStop=await api(`/api/sessions/${child}`);
+   assert.equal(afterStop.info?.relation?.processCleanupUnconfirmed,true);
+   await page.goto(base+'/?session='+parent,{waitUntil:'domcontentloaded',timeout:16000});
+   await page.getByRole('button',{name:/^Agents/i}).first().click();
+   await page.getByRole('option').filter({hasText:task}).getByText(/process cleanup unconfirmed|进程清理未确认|程序清理未確認/i).waitFor();
+   console.log('PASS Agents reload and browser Stop; unconfirmed cleanup displayed; shell and nested PIDs exited:',pid,nested);
    }
  }else{
    const final=await retry('managed command completed',async()=>{
@@ -117,6 +126,7 @@ try {
    const text=result.content.map(x=>x.text??'').join('\n');
    if(mode==='failure'){
      assert.equal(result.isError,true);
+     assert.equal(final.relation.status,'failed');
      for(const token of ['fixture-stdout','fixture-stderr','Command exited with code 7'])assert.ok(text.includes(token),text);
    }else{
      assert.equal(final.relation.status,'completed');

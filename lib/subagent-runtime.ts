@@ -46,6 +46,7 @@ import {
   createProjectCommandBashExtension,
   createProjectCommandPowerShellExtension,
   isProjectCommandShellExtension,
+  PROJECT_COMMAND_CLEANUP_UNCONFIRMED,
   preferUserBashExtension,
   preferUserPowerShellExtension,
 } from "./project-command-env";
@@ -151,7 +152,7 @@ function lastAssistantStop(sessionManager: { getEntries?: () => unknown }): { ab
   return undefined;
 }
 
-type RunMessage = { role?: unknown; stopReason?: unknown; content?: unknown };
+type RunMessage = { role?: unknown; stopReason?: unknown; content?: unknown; toolName?: unknown; isError?: unknown };
 
 function messageText(message: RunMessage): string {
   if (!Array.isArray(message.content)) return typeof message.content === "string" ? message.content.trim() : "";
@@ -160,7 +161,25 @@ function messageText(message: RunMessage): string {
     .join("").trim();
 }
 
-type RunEntry = { type?: unknown; id?: unknown; targetId?: unknown; replacement?: { content?: unknown } | null; message?: RunMessage };
+type RunEntry = { type?: unknown; id?: unknown; targetId?: unknown; replacement?: { content?: unknown } | null; message?: RunMessage; customType?: unknown };
+
+function unconfirmedCleanup(entries: readonly RunEntry[], from: number): { processCleanupUnconfirmed?: true } {
+  return entries.slice(from).some((entry) => entry.type === "custom" && entry.customType === PROJECT_COMMAND_CLEANUP_UNCONFIRMED)
+    ? { processCleanupUnconfirmed: true }
+    : {};
+}
+
+function managedCommandFailure(entries: readonly RunEntry[], from: number): string | undefined {
+  for (let i = entries.length - 1; i >= from; i -= 1) {
+    const entry = entries[i];
+    if (entry?.type !== "message" || entry.message?.role !== "toolResult" || !entry.message.isError) continue;
+    if (entry.message.toolName !== "bash" && entry.message.toolName !== "powershell") continue;
+    const text = messageText(entry.message);
+    const reason = text.split(/\r?\n/).filter(Boolean).at(-1)?.trim();
+    return reason ? `Project command failed: ${reason.slice(0, 300)}` : "Project command failed. See the command output.";
+  }
+  return undefined;
+}
 
 /**
  * A run's report: the text of every assistant message the run appended (entries from `from` on)
@@ -524,6 +543,7 @@ function recordResult(sessionManager: SessionManager, run: SubagentRunInfo): Sub
     completedAt: recorded.completedAt!,
     ...(recorded.result ? { result: recorded.result } : {}),
     ...(recorded.error ? { error: recorded.error } : {}),
+    ...(recorded.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}),
     ...(recorded.worktreeCleanupError ? { worktreeCleanupError: recorded.worktreeCleanupError } : {}),
     ...(recorded.worktreeExists !== undefined ? { worktreeExists: recorded.worktreeExists } : {}),
   };
@@ -885,7 +905,8 @@ export function createSubagentController(
           const stop = stored.abortRequested ? undefined : lastAssistantStop(sessionManager);
           const aborted = stored.abortRequested || stop?.aborted === true;
           const errorMessage = aborted ? undefined : stop?.error ??
-            (maxTurnsReached && turnLimit ? turnLimitError(turnLimit, undelivered) : undefined);
+            (maxTurnsReached && turnLimit ? turnLimitError(turnLimit, undelivered) : undefined) ??
+            managedCommandFailure(sessionManager.getEntries(), runStart);
           result = {
             ...initialRun,
             status: aborted ? "aborted" : errorMessage ? "failed" : "completed",
@@ -916,7 +937,7 @@ export function createSubagentController(
 
         const cleanupError = await cleanupWorktree(parent.cwd, isolatedWorktree);
         if (cleanupError) result = { ...result, worktreeCleanupError: cleanupError };
-        result = recordResult(sessionManager, result);
+        result = recordResult(sessionManager, { ...result, ...unconfirmedCleanup(sessionManager.getEntries(), runStart) });
         stored.run = result;
         request.onUpdate?.(result);
         getSubagentRuns().delete(initialRun.sessionId);
@@ -1018,6 +1039,7 @@ export function createSubagentController(
       error: undefined,
       // Resume removes no worktree: this run's result says only whether it is still there.
       worktreeCleanupError: undefined,
+      processCleanupUnconfirmed: undefined,
       worktreeExists: undefined,
       resumed: true,
     };
@@ -1066,13 +1088,13 @@ export function createSubagentController(
         const text = runResultText(manager, runStart);
         const stop = stored.abortRequested ? undefined : lastAssistantStop(manager);
         const aborted = stored.abortRequested || stop?.aborted === true;
-        const providerError = aborted ? undefined : stop?.error;
+        const errorMessage = aborted ? undefined : stop?.error ?? managedCommandFailure(manager.getEntries(), runStart);
         result = {
           ...initialRun,
-          status: aborted ? "aborted" : providerError ? "failed" : "completed",
+          status: aborted ? "aborted" : errorMessage ? "failed" : "completed",
           completedAt: new Date().toISOString(),
           ...(text ? { result: text } : {}),
-          ...(providerError ? { error: providerError } : {}),
+          ...(errorMessage ? { error: errorMessage } : {}),
         };
       } catch (error) {
         const text = runResultText(manager, runStart);
@@ -1086,7 +1108,7 @@ export function createSubagentController(
       } finally {
         request.signal?.removeEventListener("abort", handleParentAbort);
       }
-      result = recordResult(manager, result);
+      result = recordResult(manager, { ...result, ...unconfirmedCleanup(manager.getEntries(), runStart) });
       stored.run = result;
       request.onUpdate?.(result);
       getSubagentRuns().delete(request.sessionId);
@@ -1268,12 +1290,17 @@ export function createSubagentController(
     if (!run || (run.status !== "running" && run.status !== "queued")) return;
     const text = wrapper.inner.getLastAssistantText()?.trim();
     const stop = aborted ? undefined : lastAssistantStop(manager);
+    const entries = manager.getEntries();
+    // A directly prompted child with an interrupted run has no live run boundary.
+    const from = entries.findLastIndex((entry) => entry.type === "message" && entry.message.role === "user") + 1;
+    const error = aborted || stop?.aborted ? undefined : stop?.error ?? managedCommandFailure(entries, from);
     recordResult(manager, {
       ...run,
-      status: aborted || stop?.aborted ? "aborted" : stop?.error ? "failed" : "completed",
+      status: aborted || stop?.aborted ? "aborted" : error ? "failed" : "completed",
       completedAt: new Date().toISOString(),
       ...(text ? { result: text } : {}),
-      ...(stop?.error ? { error: stop.error } : {}),
+      ...(error ? { error } : {}),
+      ...unconfirmedCleanup(entries, from),
     });
     dependencies.invalidateSessionList();
   }

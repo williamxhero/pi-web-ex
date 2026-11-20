@@ -106,6 +106,7 @@ export interface SubagentResultMetadata {
   result?: string;
   error?: string;
   worktreeCleanupError?: string;
+  processCleanupUnconfirmed?: true;
   /** Whether an isolated run's worktree path still existed when this entry was written (#1202). */
   worktreeExists?: boolean;
 }
@@ -132,6 +133,7 @@ export interface SubagentRunInfo {
   worktreePath?: string;
   worktreeBranch?: string;
   worktreeCleanupError?: string;
+  processCleanupUnconfirmed?: true;
   /** Set once the run's result is recorded, as `SubagentResultMetadata.worktreeExists`. */
   worktreeExists?: boolean;
   /** Set on a run started by `resume`, which reuses the session ID of an earlier run. Not persisted. */
@@ -1010,6 +1012,7 @@ export function readSubagentRun(entries: readonly SessionEntry[], sessionId: str
     ...(typeof data.worktreePath === "string" ? { worktreePath: data.worktreePath } : {}),
     ...(typeof data.worktreeBranch === "string" ? { worktreeBranch: data.worktreeBranch } : {}),
     ...(result && typeof result.worktreeCleanupError === "string" ? { worktreeCleanupError: result.worktreeCleanupError } : {}),
+    ...(result?.processCleanupUnconfirmed === true ? { processCleanupUnconfirmed: true } : {}),
     ...(result && typeof result.worktreeExists === "boolean" ? { worktreeExists: result.worktreeExists } : {}),
   };
 }

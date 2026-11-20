@@ -216,6 +216,7 @@ export const enLocale: LocalePlugin = {
     "agentSwitcher.status.failed": "Failed",
     "agentSwitcher.status.aborted": "Aborted",
     "agentSwitcher.status.interrupted": "Interrupted",
+    "agentSwitcher.status.cleanupUnconfirmed": "{status} · Process cleanup unconfirmed",
     "appUpdate.releaseNotes": "Pi Web v{version} is available. View release notes",
     "sidebar.hide": "Hide sidebar",
     "sidebar.show": "Show sidebar",

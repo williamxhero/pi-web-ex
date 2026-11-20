@@ -3330,6 +3330,7 @@ export function getRpcSessionInfos(options: { includeTransient?: boolean } = {})
           profile: subagent.profile,
           description: subagent.description,
           status: session.isRunning() ? "running" as const : subagent.status,
+          ...(subagent.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true as const } : {}),
         },
       } : side ? {
         parentSessionId: side.parentSessionId,

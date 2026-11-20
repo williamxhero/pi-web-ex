@@ -19,6 +19,8 @@ const POWERSHELL_HOST_EXTENSION_PATH = `<inline:${POWERSHELL_HOST_EXTENSION_NAME
 const ABORT_SETTLE_GRACE_MS = 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
+export const PROJECT_COMMAND_CLEANUP_UNCONFIRMED = "pi-web:project-command-cleanup-unconfirmed";
+
 type ProjectShellSettings = {
   getShellCommandPrefix(): string | undefined;
   getShellPath(): string | undefined;
@@ -26,6 +28,7 @@ type ProjectShellSettings = {
 
 type ProjectCommandBashOperationsOptions = {
   abortSettleGraceMs?: number;
+  onCleanupUnconfirmed?: () => void;
   agentBinDir?: string;
   baseEnvironment?: NodeJS.ProcessEnv;
   localOperations?: BashOperations;
@@ -97,6 +100,7 @@ export function createProjectCommandBashOperations(
 ): BashOperations {
   const {
     abortSettleGraceMs = ABORT_SETTLE_GRACE_MS,
+    onCleanupUnconfirmed,
     agentBinDir = join(getAgentDir(), "bin"),
     baseEnvironment = process.env,
     localOperations = createLocalBashOperations({ shellPath: options.shellPath }),
@@ -147,6 +151,7 @@ export function createProjectCommandBashOperations(
           // The SDK can settle without verifying detached or reparented children are gone.
           if (canWarnAboutCleanup && error instanceof Error
             && (error.message === "aborted" || error.message.startsWith("timeout:"))) {
+            onCleanupUnconfirmed?.();
             onData(Buffer.from("\nWindows child-process cleanup could not be confirmed.\n"));
           }
           release();
@@ -191,6 +196,7 @@ export function createProjectCommandBashExtension(options: {
             commandPrefix: options.settings.getShellCommandPrefix(),
             operations: createProjectCommandBashOperations({
               shellPath: options.settings.getShellPath(),
+              onCleanupUnconfirmed: () => pi.appendEntry(PROJECT_COMMAND_CLEANUP_UNCONFIRMED),
             }),
           });
           return executionDefinition.execute(toolCallId, params, signal, onUpdate, context);
@@ -219,6 +225,7 @@ export function createProjectCommandPowerShellExtension(options: { cwd: string }
           const executionDefinition = createPowerShellToolDefinition(options.cwd, {
             operations: createProjectCommandBashOperations({
               localOperations: createLocalPowerShellOperations(),
+              onCleanupUnconfirmed: () => pi.appendEntry(PROJECT_COMMAND_CLEANUP_UNCONFIRMED),
             }),
           });
           return executionDefinition.execute(toolCallId, params, signal, onUpdate, context);
