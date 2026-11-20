@@ -1,0 +1,13 @@
+/* The phase selects a glyph; the browser supplies the clock. */
+@media (prefers-reduced-motion: no-preference) {
+  .dot { animation: blink .5s ease-in-out infinite alternate; }
+  .hourglass { transform-origin: 10px 10px; animation: flip .5s ease-in-out infinite; }
+  .spin { transform-origin: 10px 10px; animation: spin .5s linear infinite; }
+  .arrow { animation: nudge .5s ease-in-out infinite alternate; }
+  .retry { transform-origin: 10px 10px; animation: rock .5s ease-in-out infinite alternate; }
+}
+@keyframes blink { to { opacity: .3; } }
+@keyframes flip { 0%, 40% { transform: rotate(0); } 100% { transform: rotate(180deg); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes nudge { to { transform: translateX(2px); } }
+@keyframes rock { to { transform: rotate(22deg); } }

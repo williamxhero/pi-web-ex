@@ -12,6 +12,14 @@ export function getLoopToDoneState(statuses: readonly ExtensionStatusItem[]): bo
   if (text === "● 自动续跑：已开启" || (text && /^● 自动续跑：已开启 · 剩余 \d+ 次$/.test(text))) return true;
 }
 
+export const loopPhases = ["off","task","turn","judging","sent","retry","completed","blocked","stopped"] as const;
+export type LoopPhase = typeof loopPhases[number];
+export function getLoopPhase(items: readonly ExtensionStatusItem[]) {
+  const raw = items.find(i => i.key === STATUS_KEY + ".phase")?.text;
+  if (raw && (/^retry:[1-9]\d*$/.test(raw) || loopPhases.some(p => p === raw))) return raw;
+  return getLoopToDoneState(items) === false ? "off" : undefined;
+}
+
 export function isLoopToDoneStatus(item: ExtensionStatusItem): boolean {
-  return item.key === STATUS_KEY;
+  return item.key === STATUS_KEY || item.key === STATUS_KEY + ".phase";
 }

@@ -85,7 +85,8 @@ import { getLastSettingsSection, settingsSectionRequiresProject, type SettingsSe
 import { focusIfLost } from "@/lib/stacked-dialog";
 import { loadAgentStripLocked, saveAgentStripLocked } from "@/lib/agent-strip-lock";
 import { claimDoneChime } from "@/lib/done-chime";
-import { DISABLE_LOOP_COMMAND, ENABLE_LOOP_COMMAND } from "@/lib/loop-to-done-toolbar";
+import { LoopPhaseIcon } from "./LoopPhaseIcon";
+import { type LoopPhase, DISABLE_LOOP_COMMAND, ENABLE_LOOP_COMMAND } from "@/lib/loop-to-done-toolbar";
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 type AutoNameStatus =
@@ -377,15 +378,18 @@ export function AppShell() {
   const [loopControl, setLoopControl] = useState<{
     sessionKey: number;
     enabled: boolean;
+    phase?: string;
     send: (command: string) => Promise<void>;
   } | null>(null);
   const [loopPendingKey, setLoopPendingKey] = useState<number | null>(null);
   const loopPendingRef = useRef<number | null>(null);
-  const handleLoopToDoneChange = useCallback((enabled: boolean | undefined, send: (command: string) => Promise<void>) => {
-    setLoopControl(enabled === undefined ? null : { sessionKey, enabled, send });
+  const handleLoopToDoneChange = useCallback((enabled: boolean | undefined, send: (command: string) => Promise<void>, phase?: string) => {
+    setLoopControl(enabled === undefined ? null : { sessionKey, enabled, send, phase });
   }, [sessionKey]);
   const loopEnabled = loopControl?.sessionKey === sessionKey ? loopControl.enabled : undefined;
-  const loopStatus = translate(loopEnabled ? "loopToDone.on" : "loopToDone.off");
+  const [phaseName, retrySeconds] = (loopControl?.phase ?? "").split(":");
+  const phase = phaseName as LoopPhase | "";
+  const loopStatus = phase ? translate(`loopToDone.phase.${phase}`) + (retrySeconds ? ` (${retrySeconds}s)` : "") : translate(loopEnabled ? "loopToDone.on" : "loopToDone.off");
   const toggleLoopToDone = async () => {
     if (loopControl?.sessionKey !== sessionKey || loopPendingRef.current === sessionKey) return;
     loopPendingRef.current = sessionKey;
@@ -2144,7 +2148,7 @@ export function AppShell() {
             onClick={() => void toggleLoopToDone()}
             disabled={loopPendingKey === sessionKey}
             title={loopStatus}
-            aria-label={translate("loopToDone.label")}
+            aria-label={`${translate("loopToDone.label")} · ${loopStatus}`}
             aria-pressed={loopEnabled}
             data-mobile-toolbar-action={mobile ? "loop-to-done" : undefined}
             style={{
@@ -2163,6 +2167,7 @@ export function AppShell() {
               <path d="M20 7h-11a4 4 0 0 0-4 4v1m15-5-4-4m4 4-4 4M4 17h11a4 4 0 0 0 4-4v-1m-15 5 4 4m-4-4 4-4" />
             </svg>
             {!mobile && <span>{translate("loopToDone.label")}</span>}
+            {phase && <LoopPhaseIcon phase={phase} />}
           </button>
         )}
       </div>

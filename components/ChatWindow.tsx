@@ -20,7 +20,7 @@ import { DirectoryPicker } from "./DirectoryPicker";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { QuoteSelectionPopover } from "./QuoteSelectionPopover";
 import { ExtensionStatusBar } from "./ExtensionStatusBar";
-import { getLoopToDoneState, isLoopToDoneStatus } from "@/lib/loop-to-done-toolbar";
+import { getLoopPhase, getLoopToDoneState, isLoopToDoneStatus } from "@/lib/loop-to-done-toolbar";
 import { AnsiText } from "./AnsiText";
 import { useI18n } from "@/hooks/useI18n";
 import { phaseLabel } from "@/lib/chat-phase-label";
@@ -81,7 +81,7 @@ interface Props {
   onSystemPromptChange?: (prompt: string | null) => void;
   onSystemToolsChange?: (tools: ToolEntry[] | null) => void;
   onSystemInfoLoaderChange?: (loader: (() => Promise<void>) | null) => void;
-  onLoopToDoneChange?: (enabled: boolean | undefined, sendCommand: (command: string) => Promise<void>) => void;
+  onLoopToDoneChange?: (enabled: boolean | undefined, sendCommand: (command: string) => Promise<void>, phase?: string) => void;
   /** Registers the debug panel's read-only reader of this chat's stream and lease. */
   onDebugSnapshotReaderChange?: (reader: (() => DebugClientSession) | null) => void;
   onSessionStatsChange?: (stats: SessionStatsInfo | null) => void;
@@ -323,10 +323,11 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     onOpenSettings, onDebugSnapshotReaderChange, t,
     deferInitialScroll: Boolean(pendingScrollRestore),
   });
+  const loopPhase = getLoopPhase(extensionStatuses);
   const loopEnabled = getLoopToDoneState(extensionStatuses);
   useEffect(() => {
-    onLoopToDoneChange?.(loopEnabled, sendToolbarCommand);
-  }, [loopEnabled, onLoopToDoneChange, sendToolbarCommand]);
+    onLoopToDoneChange?.(loopEnabled, sendToolbarCommand, loopPhase);
+  }, [loopPhase, loopEnabled, onLoopToDoneChange, sendToolbarCommand]);
   // Only whether a reply is streaming and has content yet: the chunks themselves
   // re-render StreamingReply alone.
   const isStreaming = useStreamingSelector(streamingStore, selectIsStreaming);
