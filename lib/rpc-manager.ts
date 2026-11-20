@@ -3714,7 +3714,7 @@ export async function startRpcSession(
                   systemPromptOverride: () => undefined,
                 }
               : {}),
-            appendSystemPrompt: chatOnly ? subagentResources.appendSystemPrompt : [...subagentResources.appendSystemPrompt, MANAGED_AUTOMATION_POLICY],
+            appendSystemPrompt: subagentResources.appendSystemPrompt,
           }
         : chatOnly
           ? { ...CHAT_ONLY_RESOURCE_LOADER_OPTIONS, extensionFactories: [exactSystemPromptExtension] }

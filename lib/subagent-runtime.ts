@@ -50,7 +50,6 @@ import {
   preferUserPowerShellExtension,
 } from "./project-command-env";
 import { beginProjectCommandRun, takeProjectCommandRun, PROJECT_COMMAND_CLEANUP_UNCONFIRMED, PROJECT_COMMAND_OUTCOME, type ProjectCommandOutcome } from "./project-command-evidence";
-import { MANAGED_AUTOMATION_POLICY } from "./managed-automation-policy";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { SubagentQueue } from "./subagent-queue";
 import { addWorktree, removeWorktree } from "./worktree";
@@ -727,7 +726,7 @@ export function createSubagentController(
                 systemPromptOverride: () => undefined,
               }
             : {}),
-          appendSystemPrompt: chatOnly ? appendSystemPrompt : [...appendSystemPrompt, MANAGED_AUTOMATION_POLICY],
+          appendSystemPrompt,
         },
       });
 
@@ -1070,7 +1069,21 @@ export function createSubagentController(
     }
   }
 
+  const resuming = new Set<string>();
+
   async function resume(request: ResumeSubagentRequest): Promise<SubagentExecution> {
+    if (resuming.has(request.sessionId) || getSubagentRuns().has(request.sessionId)) {
+      throw new Error("Subagent is already running or resuming");
+    }
+    resuming.add(request.sessionId);
+    try {
+      return await resumeReserved(request);
+    } finally {
+      resuming.delete(request.sessionId);
+    }
+  }
+
+  async function resumeReserved(request: ResumeSubagentRequest): Promise<SubagentExecution> {
     const enabled = dependencies.isBuiltInSubagentsEnabled ?? isBuiltInSubagentsEnabled;
     if (!enabled()) throw new Error("Pi Web built-in sub-agents are disabled");
     const parentSessionId = request.parentContext.sessionManager.getSessionId();
