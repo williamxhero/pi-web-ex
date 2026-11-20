@@ -1,5 +1,6 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, SettingsManager, Theme, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
+import { buildSessionContext as buildSdkSessionContext, createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, SettingsManager, Theme, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
 import { existsSync, realpathSync, writeFileSync } from "fs";
@@ -60,7 +61,7 @@ import {
   readSideRelation,
   sideToolNames,
 } from "./side-session";
-import { SIDE_SESSION_NAME, sideChatNameFrom } from "./session-family";
+import { SIDE_BOUNDARY_MESSAGE_TYPE, SIDE_SESSION_NAME, sideChatNameFrom } from "./session-family";
 import { createSubagentController, getLiveSubagentStatus, getUnsavedSubagentResult, hasUnsettledSubagentRun } from "./subagent-runtime";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import { resolveShellTools } from "./powershell-settings";
@@ -3593,10 +3594,14 @@ export async function startRpcSession(
   const isSideChat = hasSideMetadata(sessionEntries);
   if (isSideChat && !readSideRelation(sessionEntries)) throw new Error("Invalid side chat metadata");
   const sideChatTools = isSideChat && !chatOnly;
-  // Only carry the policy into a side chat when the inherited branch had it.
-  const inheritsAutomationPolicy = isSideChat && sessionManager.getBranch().some((entry) =>
-    entry.type === "message" && entry.message.role === "system" &&
-    typeof entry.message.content === "string" && entry.message.content.includes(MANAGED_AUTOMATION_POLICY));
+  // Replay the frozen fork context, including the SDK's effective compaction checkpoint.
+  // Do not use the side chat's later turns (or arbitrary old raw system entries).
+  const boundary = isSideChat ? sessionManager.getEntries().find((entry) =>
+    entry.type === "custom_message" && entry.customType === SIDE_BOUNDARY_MESSAGE_TYPE) : undefined;
+  const inheritsAutomationPolicy = Boolean(boundary && getCurrentSystemPrompt(
+    buildSdkSessionContext(sessionManager.getEntries(), boundary.id).messages.flatMap((message) =>
+      message.role === "system" ? [message] : []),
+  ).includes(MANAGED_AUTOMATION_POLICY));
   const selectedToolNames = sideChatTools
     ? sideToolNames(pinnedToolNames, sessionManager.getBranch().flatMap((entry) => (
         entry.type === "message" && entry.message.role === "system" ? [entry.message] : []

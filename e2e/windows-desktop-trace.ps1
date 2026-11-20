@@ -158,13 +158,19 @@ try {
 $loss=Select-String -LiteralPath ($base+'.etw-integrity.txt') -Pattern 'Total Events\s+Lost\s+(\d+)' | Select-Object -First 1
 if($LASTEXITCODE -or -not $loss){throw 'Kernel process ETW integrity unavailable'}
 $lost=[int]$loss.Matches[0].Groups[1].Value
-$fromSeq=@{}; $byPid=@{}; $ended=@{}
+$fromSeq=@{}; $byPid=@{}; $ended=@{}; $exitOnly=@{}
 foreach($rec in (Get-WinEvent -Path $etl -Oldest)){
   if($rec.Id -notin 1,2 -or $rec.ProviderName -ne 'Microsoft-Windows-Kernel-Process'){continue}
   $d=@{}; foreach($x in ([xml]$rec.ToXml()).Event.EventData.Data){$d[$x.Name]=$x.'#text'}
   if(-not $d.ProcessSequenceNumber){continue}
   $seq=[long]$d.ProcessSequenceNumber
-  if($rec.Id -eq 2){$ended[$seq]=[datetime]::Parse($d.ExitTime).ToFileTimeUtc();continue}
+  if($rec.Id -eq 2){
+    $ended[$seq]=[datetime]::Parse($d.ExitTime).ToFileTimeUtc()
+    if($d.CreateTime){
+      $exitOnly[$seq]=[pscustomobject]@{Sequence=$seq;Pid=[int]$d.ProcessID;Name=[IO.Path]::GetFileName($d.ImageName);Start=[datetime]::Parse($d.CreateTime).ToFileTimeUtc();End=$ended[$seq]}
+    }
+    continue
+  }
   $wpid=[int]$d.ProcessID
   $v=[pscustomobject]@{Sequence=$seq;Pid=$wpid;Parent=[int]$d.ParentProcessID;ParentSequence=[long]$d.ParentProcessSequenceNumber;Name=[IO.Path]::GetFileName($d.ImageName);Start=[datetime]::Parse($d.CreateTime).ToFileTimeUtc();End=[long]::MaxValue}
   $fromSeq[$seq]=$v
@@ -174,6 +180,12 @@ foreach($rec in (Get-WinEvent -Path $etl -Oldest)){
 foreach($kv in $ended.GetEnumerator()){if($fromSeq.ContainsKey($kv.Key)){$fromSeq[$kv.Key].End=$kv.Value}}
 $root=@($byPid[[int]$p.Id] | Where-Object {$_.Start -ge $startBefore} | Sort-Object Start | Select-Object -First 1)[0]
 if(-not $root -or $root.End -eq [long]::MaxValue){throw 'Trace missing owned root process start/exit'}
+$preexisting=@{}
+foreach($item in $exitOnly.Values){
+  if($fromSeq.ContainsKey($item.Sequence) -or $item.Start -ge $root.Start -or $item.Sequence -ge $root.Sequence){continue}
+  if(-not $preexisting.ContainsKey($item.Pid)){$preexisting[$item.Pid]=[System.Collections.Generic.List[object]]::new()}
+  $preexisting[$item.Pid].Add($item)
+}
 function Resolve-Chain($item){
   $list=[System.Collections.Generic.List[object]]::new(); $at=$item; $result='other';$i=0
   while($at -and $i -lt 80){
@@ -201,6 +213,16 @@ $rows=@(foreach($w in $win){
   $src='unmatched';$chain='';$seq=0
   if($method -ne 'none'){$srcInfo=Resolve-Chain $m[0]; $src=$srcInfo.Source; $chain=$srcInfo.Chain;$seq=$m[0].Sequence}
   elseif($m.Count -gt 1){$src='ambiguous'}
+  else {
+    # ETW exit records also identify instances that started before the trace/root.
+    # Require a unique lifetime, and use creation identity when available. Never infer missing ancestry from PID alone.
+    $before=@($preexisting[[int]$w.Pid] | Where-Object {$_ -and $_.Start -le $w.Utc -and $_.End -ge $w.Utc -and
+      ($w.Creation -eq 0 -or [Math]::Abs($_.Start-$w.Creation) -le 1000)})
+    if($before.Count -eq 1 -and $m.Count -eq 0){
+      $other=$before[0]; $src='preexisting'; $seq=$other.Sequence; $method='exit-lifetime';
+      $chain=$other.Name+'['+$other.Pid+':'+$seq+'] (created before probe root; parent not recorded)'
+    }elseif($before.Count -gt 1){$src='ambiguous'}
+  }
   [pscustomobject]@{At=[datetime]::FromFileTimeUtc($w.Utc).ToString('o');Pid=$w.Pid;Sequence=$seq;Hwnd=$w.Hwnd;Edge=$edge;Class=$w.Class;Hint=$w.Hint;Attribution=$method;Source=$src;Chain=$chain}
 })
 $rows | Export-Csv -NoTypeInformation -Encoding utf8 ($base+'.windows.csv')
@@ -219,6 +241,7 @@ $summary=[ordered]@{
   OwnedVisible=@($rows|Where-Object {$_.Source -eq 'owned' -and $_.Edge -eq 'visible'}).Count
   OwnedFocus=@($rows|Where-Object {$_.Source -eq 'owned' -and $_.Edge -eq 'focus'}).Count
   UncertainConsole=@($rows|Where-Object {$_.Source -in 'ambiguous','unmatched' -and $_.Hint -in 'git','console','control' -and $_.Edge -ne 'hidden'}).Count
+  PreexistingConsole=@($rows|Where-Object {$_.Source -eq 'preexisting' -and $_.Hint -in 'git','console','control' -and $_.Edge -ne 'hidden'}).Count
   OwnedTaskbarAdd=@($rows|Where-Object {$_.Source -eq 'owned' -and $_.Edge -eq 'taskbar-add'}).Count
   OwnedTaskbarFlash=@($rows|Where-Object {$_.Source -eq 'owned' -and $_.Edge -eq 'taskbar-flash'}).Count
   OwnedNoExit=@($owned|Where-Object End -eq ([long]::MaxValue)).Count
