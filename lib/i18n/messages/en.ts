@@ -874,6 +874,7 @@ export const enLocale: LocalePlugin = {
     "chat.compact": "Compact",
     "chat.dismissCompactError": "Dismiss compaction error",
     "chat.stopAgent": "Stop agent",
+    "chat.managedRunConflict": "Message not sent. This child has a managed run; try again after it settles.",
     "chat.stop": "Stop",
     "chat.disableSound": "Disable completion sound",
     "chat.enableSound": "Enable completion sound",

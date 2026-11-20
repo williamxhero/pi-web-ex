@@ -15,7 +15,7 @@ import type {
 } from "@/lib/types";
 import { isBlockingExtensionUiRequest } from "@/lib/browser-notifications";
 import { normalizeToolCalls } from "@/lib/normalize";
-import { AgentCommandError, agentStatusUrl, EXTENSION_REPORTED_CODE, isPromptRejectedError, sendAgentCommand } from "@/lib/agent-client";
+import { AgentCommandError, agentStatusUrl, EXTENSION_REPORTED_CODE, isManagedRunConflict, isPromptRejectedError, sendAgentCommand } from "@/lib/agent-client";
 import { createSideChat, SIDE_REFUSAL_MESSAGES } from "@/lib/side-chat-client";
 import { missingCwdFromBody } from "@/lib/missing-cwd";
 import { forkFailureMessage } from "@/lib/sidebar-actions";
@@ -2471,7 +2471,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // A folder that no longer exists never reached the model: the composer's
       // banner names it (translated) instead of the server's English notice.
       if (e instanceof AgentCommandError && e.missingCwd) setPromptMissingCwd(e.missingCwd);
-      else addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      else addNotice({ type: "error", message: isManagedRunConflict(e) ? translate("chat.managedRunConflict") : e instanceof Error ? e.message : String(e) });
       restoreSubmission(message, images, composerDraftKey);
       optimisticUserMessageKeyRef.current = null;
       // Rejection only describes this submission. Another tab or an event we
@@ -3130,10 +3130,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setPromptMissingCwd(e.missingCwd);
         return;
       }
-      if (isPromptRejectedError(e)) addNotice({ type: "error", message: e.message });
+      if (isPromptRejectedError(e)) addNotice({ type: "error", message: isManagedRunConflict(e) ? translate("chat.managedRunConflict") : e.message });
       else addUnconfirmedSendNotice();
     }
-  }, [addNotice, addUnconfirmedSendNotice, composerDraftKey, editEntryId, restoreSubmission]);
+  }, [addNotice, addUnconfirmedSendNotice, composerDraftKey, editEntryId, restoreSubmission, translate]);
 
   const sendToolbarCommand = useCallback(async (command: string) => {
     const sid = sessionIdRef.current;
@@ -3150,7 +3150,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       await refreshContextUsage(sid, true);
     } catch (error) {
       if (!sessionHookMountedRef.current || sessionIdRef.current !== sid) return;
-      if (isPromptRejectedError(error)) addNotice({ type: "error", message: error.message });
+      if (isPromptRejectedError(error)) addNotice({ type: "error", message: isManagedRunConflict(error) ? translate("chat.managedRunConflict") : error.message });
       else addNotice({ type: "warning", message: translate("loopToDone.unconfirmed") });
     }
   }, [addNotice, refreshContextUsage, translate]);

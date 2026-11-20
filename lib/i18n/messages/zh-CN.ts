@@ -874,6 +874,7 @@ export const zhCNLocale: LocalePlugin = {
     "chat.compact": "压缩",
     "chat.dismissCompactError": "关闭压缩错误",
     "chat.stopAgent": "停止 Agent",
+    "chat.managedRunConflict": "消息未发送。此子任务已有受管运行，请等它结束后重试。",
     "chat.stop": "停止",
     "chat.disableSound": "关闭完成提示音",
     "chat.enableSound": "开启完成提示音",

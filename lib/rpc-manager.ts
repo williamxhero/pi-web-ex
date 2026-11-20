@@ -7,7 +7,7 @@ import { existsSync, realpathSync, writeFileSync } from "fs";
 import { resolve } from "path";
 import { isDeepStrictEqual } from "util";
 import { validateAgentImages } from "./image-attachments";
-import { EXTENSION_REPORTED_CODE } from "./agent-client";
+import { EXTENSION_REPORTED_CODE, MANAGED_RUN_CONFLICT_CODE } from "./agent-client";
 import { cwdMissingError } from "./missing-cwd";
 import { invalidateModelsCache } from "./models-cache";
 import { invalidateModelRuntimeWithExtensions } from "./model-runtime";
@@ -22,7 +22,7 @@ import {
   preferUserBashExtension,
   preferUserPowerShellExtension,
 } from "./project-command-env";
-import { beginProjectCommandRun } from "./project-command-evidence";
+import { beginProjectCommandRun, PROJECT_COMMAND_CLEANUP_UNCONFIRMED } from "./project-command-evidence";
 import { MANAGED_AUTOMATION_POLICY } from "./managed-automation-policy";
 import { cacheSessionPath, catalogFirstMessage, getLatestModelChange, invalidateSessionListCache, invalidateSessionManagerCache, invalidateSessionPathCache, readLatestSessionEntryId, resolveSessionPath } from "./session-reader";
 import { computeLiveSessionTotalActiveMs } from "./session-timing";
@@ -1394,7 +1394,7 @@ export class AgentSessionWrapper {
       if (!blocksDirectSubagentMessage(this.sessionId)) return;
       // Steering an actually streaming child remains supported; an idle SDK queue is not delivery.
       if (this.inner.isStreaming && (type !== "prompt" || command.streamingBehavior === "steer" || command.streamingBehavior === "followUp")) return;
-      throw new Error("Message not accepted: this child has a managed run. Try again when it settles.");
+      throw Object.assign(new Error("Message not accepted: this child has a managed run. Try again when it settles."), { code: MANAGED_RUN_CONFLICT_CODE });
     };
     checkManagedMessageAdmission();
     // A status read (the chat's reconciliation, every few seconds while it runs) would hide the
@@ -2058,6 +2058,10 @@ export class AgentSessionWrapper {
               // environment and agent bin directory into that sandbox.
               operations: hooked?.operations ?? createProjectCommandBashOperations({
                 shellPath: this.inner.settingsManager.getShellPath(),
+                onCleanupUnconfirmed: () => {
+                  this.inner.sessionManager.appendCustomEntry(PROJECT_COMMAND_CLEANUP_UNCONFIRMED, { source: "user_bash" });
+                  this.persistBashOnlySession();
+                },
               }),
             });
           }
