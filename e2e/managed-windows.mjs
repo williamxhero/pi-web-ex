@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {stopOwnedTree,withAcceptanceCleanup} from './owned-process.mjs';
+import {closeOwnedBrowser,stopOwnedTree,withAcceptanceCleanup} from './owned-process.mjs';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,readdirSync,rmSync,createWriteStream} from 'node:fs';
@@ -208,7 +208,9 @@ await withAcceptanceCleanup(async()=>{
  }
 },async()=>{
  release();
- const stopped=await Promise.allSettled([browser?.close(),stopOwnedTree(sentinel,log),stopOwnedTree(server,log)]);
+ // Let the browser stop sending requests before the server tree is enumerated.
+ const browserClosed=await Promise.allSettled([closeOwnedBrowser(browser)]);
+ const stopped=[...browserClosed,...await Promise.allSettled([stopOwnedTree(sentinel,log),stopOwnedTree(server,log)])];
  authServer?.closeAllConnections();authServer?.close();
  model.closeAllConnections();model.close();
  await new Promise((resolve,reject)=>{log.once('error',reject);log.end(resolve);});

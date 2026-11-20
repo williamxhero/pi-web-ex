@@ -76,6 +76,9 @@ export function preventWindowsGitPrompts(
     GIT_ASKPASS: "",
     GCM_INTERACTIVE: "never",
     SSH_ASKPASS_REQUIRE: "never",
+    // Standard OpenSSH cannot fall back to terminal passwords or host-key confirmation.
+    GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes",
+    GIT_SSH_VARIANT: "ssh",
   };
   const result = { ...environment };
   for (const name of Object.keys(result)) {

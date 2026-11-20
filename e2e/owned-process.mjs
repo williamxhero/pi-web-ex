@@ -23,6 +23,21 @@ export async function stopOwnedTree(process, log, { kill = spawnSync, deadline =
   }
 }
 
+export async function closeOwnedBrowser(browser, { deadline = 7000 } = {}) {
+  if (!browser) return;
+  let timer;
+  try {
+    await Promise.race([
+      browser.close(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Timed out closing the isolated browser')), deadline);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function withAcceptanceCleanup(run, cleanup) {
   let original;
   try { return await run(); }
