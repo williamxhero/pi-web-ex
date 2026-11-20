@@ -8,7 +8,7 @@ For a quick check, delegate a small non-GUI task in the background. Open **Agent
 
 If the managed tool isn't available or dispatch fails, don't start a separate Pi process or switch to another agent as an automatic fallback. If an authorized short command can do the work, run it in the current session and wait for its exit; otherwise report that delegation could not start. This rule does not change extensions the operator intentionally chooses or claim to track work started outside Pi Web.
 
-For project-owned automation on Windows, use noninteractive, no-window launches at each owned launch point, including nested commands. Keep stdout, stderr, and exit status available; report when manual input or cleanup is needed rather than opening a prompt or browser. Hiding only the launcher or detaching it is not enough. These are operating rules, not a guarantee about arbitrary external tools or work started outside the session.
+For project-owned automation on Windows, use noninteractive, no-window launches at each owned launch point, including nested commands. Keep stdout, stderr, and exit status available; report when manual input or cleanup is needed rather than opening a prompt or browser. Hiding only the launcher or detaching it is not enough. These are operating rules, not a guarantee about arbitrary external tools or work started outside the session. For migration steps and desktop evidence, use the [managed Windows acceptance runbook](managed-windows-acceptance.md).
 
 ## Built-in subagents
 - If child registration fails after persistence, the run records a failure with the original setup error before returning the tool error. No child work is queued. A failed worktree cleanup is reported without force-removing the checkout.
