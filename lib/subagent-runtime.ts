@@ -1087,6 +1087,7 @@ export function createSubagentController(
     let resolveCompletion!: (run: SubagentRunInfo) => void;
     const completion = new Promise<SubagentRunInfo>((resolve) => { resolveCompletion = resolve; });
     const stored: StoredSubagentExecution = { run: initialRun, completion, abortRequested: false, dispatchedAt: Date.now() };
+    unsavedSubagentResults.delete(request.sessionId);
     getSubagentRuns().set(request.sessionId, stored);
     request.onUpdate?.(initialRun);
     dependencies.invalidateSessionList();
@@ -1109,17 +1110,17 @@ export function createSubagentController(
         resolveCompletion(result);
         return result;
       }
-      stored.run = { ...stored.run, status: "running" };
-      manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running",
-        ...(initialRun.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
-      request.onUpdate?.(stored.run);
       let result: SubagentRunInfo;
       // Earlier runs' messages are on the same branch; only this run's answers are its result.
       const runStart = manager.getEntries().length;
-      beginProjectCommandRun(manager);
       let evidence: ReturnType<typeof takeProjectCommandRun>;
       try {
         if (!wrapper!.isAlive()) throw new Error(CLOSED_BEFORE_RUN);
+        manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running",
+          ...(initialRun.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
+        stored.run = { ...stored.run, status: "running" };
+        request.onUpdate?.(stored.run);
+        beginProjectCommandRun(manager);
         await prepareChildMcp(wrapper, stored);
         await wrapper!.inner.prompt(request.task, { source: "rpc" });
         evidence = takeProjectCommandRun(manager);

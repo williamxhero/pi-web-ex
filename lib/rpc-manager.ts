@@ -3710,7 +3710,7 @@ export async function startRpcSession(
         : chatOnly
           ? { ...CHAT_ONLY_RESOURCE_LOADER_OPTIONS, extensionFactories: [exactSystemPromptExtension] }
         : {
-            appendSystemPrompt: [MANAGED_AUTOMATION_POLICY],
+            ...(isSideChat ? {} : { appendSystemPrompt: [MANAGED_AUTOMATION_POLICY] }),
             extensionFactories: [
               llamaCppExtension,
               ...(builtins?.extensions ?? []),
