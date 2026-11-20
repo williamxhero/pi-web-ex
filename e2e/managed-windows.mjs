@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import {spawn,spawnSync} from 'node:child_process';
+import {spawn} from 'node:child_process';
+import {stopOwnedTree,withAcceptanceCleanup} from './owned-process.mjs';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,readdirSync,rmSync,createWriteStream} from 'node:fs';
@@ -62,7 +63,7 @@ const model=createServer(async(req,res)=>{
 });
 async function listen(s){s.listen(0,'127.0.0.1'); await once(s,'listening');return s.address().port;}
 async function retry(name,fn,ms=18000){const end=Date.now()+ms;let last;while(Date.now()<end){try{const v=await fn();if(v)return v;}catch(e){last=e;} await delay(250);}throw new Error('Timeout: '+name,{cause:last});}
-try {
+await withAcceptanceCleanup(async()=>{
  if(mode==='interaction'){
    authServer=createServer((_req,res)=>{authRequests++;unauthorized++;res.writeHead(401,{'www-authenticate':'Basic realm="pi-web-fixture"'}).end();});
    const authPort=await listen(authServer);
@@ -119,9 +120,7 @@ try {
        assert.ok(!prefix.some(e=>e.customType==='pi-web:subagent-result'));
        const childStopped=()=>!alive(pid)&&!alive(nested);
        await retry('own shell and nested process exit',childStopped);
-       const exited=once(server,'exit');
-       const killed=spawnSync('taskkill.exe',['/pid',String(server.pid),'/t','/f'],{windowsHide:true,encoding:'utf8',timeout:5000});
-       assert.equal(killed.status,0,killed.stderr); await exited;
+       await stopOwnedTree(server,log);
        if(mode==='resume-cleanup'){
          // Recreate the durable snapshot: only the previous result carries the warning.
          const markerEntry=prefix.pop();
@@ -130,9 +129,7 @@ try {
        }
        writeFileSync(sessionPath,prefix.map(entry=>JSON.stringify(entry)).join('\n')+'\n');
      }else{
-     const exited=once(server,'exit');
-     const killed=spawnSync('taskkill.exe',['/pid',String(server.pid),'/t','/f'],{windowsHide:true,encoding:'utf8',timeout:5000});
-     assert.equal(killed.status,0,killed.stderr); await exited;
+       await stopOwnedTree(server,log);
      }
      server=startServer(); connectLogs();
      await retry('orphan status after isolated Next restart',async()=>{
@@ -209,20 +206,13 @@ try {
    console.log('PASS persisted '+mode+' command output/result:',text);
  }
  }
-}finally{
- release();await browser?.close();
- if(sentinel?.pid&&sentinel.exitCode===null&&sentinel.signalCode===null){const done=once(sentinel,'exit');sentinel.kill();await done;}
+},async()=>{
+ release();
+ const stopped=await Promise.allSettled([browser?.close(),stopOwnedTree(sentinel,log),stopOwnedTree(server,log)]);
  authServer?.closeAllConnections();authServer?.close();
- let cleanupError;
- if(server?.pid&&server.exitCode===null&&server.signalCode===null){
-   const exited=once(server,'exit');
-   const killed=spawnSync('taskkill.exe',['/pid',String(server.pid),'/t','/f'],{windowsHide:true,encoding:'utf8',timeout:5000});
-   log.write(`Final server stop: exit=${killed.status ?? 'none'}\n${killed.stdout ?? ''}${killed.stderr ?? ''}`);
-   if(killed.status!==0)cleanupError=new Error(`Could not confirm isolated server cleanup: exit ${killed.status ?? 'unknown'}`);
-   else if(!await Promise.race([exited.then(()=>true),delay(7000,false,{ref:false})]))cleanupError=new Error('Timed out waiting for isolated server exit');
- }
  model.closeAllConnections();model.close();
  await new Promise((resolve,reject)=>{log.once('error',reject);log.end(resolve);});
- if(cleanupError)throw cleanupError;
+ const faults=stopped.flatMap((entry)=>entry.status==='rejected'?[entry.reason]:[]);
+ if(faults.length)throw new AggregateError(faults,faults.map(error=>error.message).join('; '));
  rmSync(tmp,{recursive:true,force:true,maxRetries:4,retryDelay:200});
-}
+});

@@ -1,3 +1,4 @@
+import { silentCommandLaunch } from "./command-launch";
 import { preventWindowsGitPrompts, sanitizeProjectCommandEnvironment } from "./project-command-env";
 
 /**
@@ -11,6 +12,6 @@ export function projectGitEnvironment(base: NodeJS.ProcessEnv = process.env): No
 }
 
 /** Defaults for direct, noninteractive background Git launches. */
-export function projectGitLaunchOptions() {
-  return { windowsHide: true, env: projectGitEnvironment() };
+export function projectGitLaunchOptions(base?: NodeJS.ProcessEnv) {
+  return { ...silentCommandLaunch, env: projectGitEnvironment(base) };
 }
