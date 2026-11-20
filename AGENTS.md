@@ -1,5 +1,9 @@
 # Pi Web - Development Notes
 
+## Fork README policy
+
+When merging upstream, preserve the fork’s root `README.md` (fork additions and one link to `blob/main/docs/README.zh-CN.md`). Apply upstream root README changes only to `docs/README_eng.md`, rebasing relative links for its `docs/` location. Before committing an upstream merge, compare the root README to the pre-merge fork tip even if Git reported no conflict; it must be unchanged unless the user separately requested edits to the fork README.
+
 ## Quick Start
 
 ```bash
