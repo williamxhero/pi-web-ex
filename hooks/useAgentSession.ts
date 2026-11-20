@@ -526,6 +526,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [extensionDialogs, setExtensionDialogs] = useState<ExtensionUiDialogRequest[]>([]);
   const [extensionCustomUis, setExtensionCustomUis] = useState<ExtensionUiCustomRequest[]>([]);
   const [extensionStatuses, setExtensionStatuses] = useState<ExtensionStatusItem[]>([]);
+  const extensionStatusEventVersion = useRef(0);
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
 
@@ -806,14 +807,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (typeof state?.totalActiveMs === "number") setLiveTotalActiveMs({ sessionId: sid, value: state.totalActiveMs });
   }, []);
 
-  const refreshContextUsage = useCallback(async (sid: string) => {
+  const refreshContextUsage = useCallback(async (sid: string, includeExtensionStatuses = false) => {
     const runId = promptRunIdRef.current;
     const requestId = ++contextUsageRequestIdRef.current;
+    const statusVersion = extensionStatusEventVersion.current;
     try {
       const res = await fetch(agentStatusUrl(sid));
       if (!res.ok) return;
       const data = await res.json() as { state?: AgentStateResponse };
       applyLiveUsage(data.state, sid, runId, requestId);
+      // On a cold open session_start may have published statuses before the SSE subscribed.
+      // Never let the connection snapshot overwrite a status event received meanwhile.
+      if (includeExtensionStatuses && sessionHookMountedRef.current && sessionIdRef.current === sid
+        && statusVersion === extensionStatusEventVersion.current && data.state?.extensionStatuses !== undefined) {
+        setExtensionStatuses(data.state.extensionStatuses);
+      }
     } catch {
       // A later message or the running-state poll retries the usage read.
     }
@@ -1563,6 +1571,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         break;
       }
       case "setStatus":
+        extensionStatusEventVersion.current += 1;
         setExtensionStatuses((prev) => {
           const rest = prev.filter((item) => item.key !== request.statusKey);
           return request.statusText !== undefined
@@ -1939,7 +1948,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
         // Opening the stream is what resumes an idle-reaped session, so the
         // mount's state read may have found no runtime and no usage to show.
-        if (sessionIdRef.current) void refreshContextUsage(sessionIdRef.current);
+        if (sessionIdRef.current) void refreshContextUsage(sessionIdRef.current, true);
         break;
       }
       case "agent_start":
@@ -3053,6 +3062,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [addNotice, addUnconfirmedSendNotice, composerDraftKey, editEntryId, restoreSubmission]);
 
+  const sendToolbarCommand = useCallback(async (command: string) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      // Verify that this is still an extension command (e.g. after /reload), not model input.
+      const { commands } = await sendAgentCommand<SlashCommandsResponse>(sid, { type: "get_commands" });
+      if (!sessionHookMountedRef.current || sessionIdRef.current !== sid) return;
+      if (!commands?.some((item) => item.source === "extension" && `/${item.name}` === command)) {
+        await refreshContextUsage(sid, true);
+        return;
+      }
+      await sendAgentCommand(sid, { type: "prompt", message: command, streamingBehavior: "followUp" });
+      await refreshContextUsage(sid, true);
+    } catch (error) {
+      if (!sessionHookMountedRef.current || sessionIdRef.current !== sid) return;
+      if (isPromptRejectedError(error)) addNotice({ type: "error", message: error.message });
+      else addNotice({ type: "warning", message: translate("loopToDone.unconfirmed") });
+    }
+  }, [addNotice, refreshContextUsage, translate]);
+
   const handleSteer = useCallback(async (message: string, images?: AttachedImage[]) => {
     await sendStreamingPrompt(message, "steer", images);
   }, [sendStreamingPrompt]);
@@ -3174,6 +3203,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       ]);
       if (sessionHookMountedRef.current && sessionIdRef.current === activeSessionId) {
         setSystemPrompt(state.systemPrompt ?? "");
+        setExtensionStatuses(state.extensionStatuses ?? []);
         syncLiveModel(state);
       }
     } catch (e) {
@@ -3629,7 +3659,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     sessionIdRef, scrollContainerRef,
     lastUserMsgRef, pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
-    handleSend, handleAbort, startSideChat, handleFork, handleNavigate, handleModelChange,
+    handleSend, sendToolbarCommand, handleAbort, startSideChat, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     dismissCompactError,
     handleRecallQueue,

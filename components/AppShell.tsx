@@ -85,6 +85,7 @@ import { getLastSettingsSection, settingsSectionRequiresProject, type SettingsSe
 import { focusIfLost } from "@/lib/stacked-dialog";
 import { loadAgentStripLocked, saveAgentStripLocked } from "@/lib/agent-strip-lock";
 import { claimDoneChime } from "@/lib/done-chime";
+import { DISABLE_LOOP_COMMAND, ENABLE_LOOP_COMMAND } from "@/lib/loop-to-done-toolbar";
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 type AutoNameStatus =
@@ -373,6 +374,31 @@ export function AppShell() {
   const systemInfoLoaderRef = useRef<(() => Promise<void>) | null>(null);
   const systemInfoLoadIdRef = useRef(0);
   const systemBtnRef = useRef<HTMLButtonElement>(null);
+  const [loopControl, setLoopControl] = useState<{
+    sessionKey: number;
+    enabled: boolean;
+    send: (command: string) => Promise<void>;
+  } | null>(null);
+  const [loopPendingKey, setLoopPendingKey] = useState<number | null>(null);
+  const loopPendingRef = useRef<number | null>(null);
+  const handleLoopToDoneChange = useCallback((enabled: boolean | undefined, send: (command: string) => Promise<void>) => {
+    setLoopControl(enabled === undefined ? null : { sessionKey, enabled, send });
+  }, [sessionKey]);
+  const loopEnabled = loopControl?.sessionKey === sessionKey ? loopControl.enabled : undefined;
+  const loopStatus = translate(loopEnabled ? "loopToDone.on" : "loopToDone.off");
+  const toggleLoopToDone = async () => {
+    if (loopControl?.sessionKey !== sessionKey || loopPendingRef.current === sessionKey) return;
+    loopPendingRef.current = sessionKey;
+    setLoopPendingKey(sessionKey);
+    try {
+      await loopControl.send(loopEnabled ? DISABLE_LOOP_COMMAND : ENABLE_LOOP_COMMAND);
+    } finally {
+      if (loopPendingRef.current === sessionKey) {
+        loopPendingRef.current = null;
+        setLoopPendingKey(null);
+      }
+    }
+  };
 
   const handleSystemPromptChange = useCallback((prompt: string | null) => {
     setSystemPrompt(prompt);
@@ -2103,6 +2129,33 @@ export function AppShell() {
           </svg>
           {!mobile && <span>{translate("tools.label")}</span>}
         </button>
+        {showChat && loopEnabled !== undefined && (
+          <button
+            type="button"
+            onClick={() => void toggleLoopToDone()}
+            disabled={loopPendingKey === sessionKey}
+            title={loopStatus}
+            aria-label={translate("loopToDone.label")}
+            aria-pressed={loopEnabled}
+            data-mobile-toolbar-action={mobile ? "loop-to-done" : undefined}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              width: mobile ? TOP_BAR_ICON_BUTTON_SIZE : undefined,
+              height: "100%", padding: mobile ? 0 : "0 12px",
+              background: loopEnabled ? "var(--bg-selected)" : "none",
+              border: "none", borderRight: "1px solid var(--border)",
+              borderTop: loopEnabled ? "2px solid var(--accent)" : "2px solid transparent",
+              color: loopEnabled ? "var(--accent)" : "var(--text-muted)",
+              cursor: loopPendingKey === sessionKey ? "wait" : "pointer",
+              flexShrink: 0, fontSize: 11, whiteSpace: "nowrap",
+            }}
+          >
+            <svg width={mobile ? 16 : 12} height={mobile ? 16 : 12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M20 7h-11a4 4 0 0 0-4 4v1m15-5-4-4m4 4-4 4M4 17h11a4 4 0 0 0 4-4v-1m-15 5 4 4m-4-4 4-4" />
+            </svg>
+            {!mobile && <span>{translate("loopToDone.label")}</span>}
+          </button>
+        )}
       </div>
     );
   };
@@ -2912,6 +2965,7 @@ export function AppShell() {
               onSystemPromptChange={handleSystemPromptChange}
               onSystemToolsChange={handleSystemToolsChange}
               onSystemInfoLoaderChange={handleSystemInfoLoaderChange}
+              onLoopToDoneChange={handleLoopToDoneChange}
               onDebugSnapshotReaderChange={handleDebugSnapshotReaderChange}
               onSessionStatsChange={handleSessionStatsChange}
               onSessionStatsPanelOpen={openSessionStatsPanel}
