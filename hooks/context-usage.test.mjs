@@ -21,7 +21,7 @@ function setup() {
   const activeWrites = [];
   const requests = [];
   const context = createContext({
-    sessionHookMountedRef: { current: true }, sessionIdRef: { current: "a" },
+    sessionHookMountedRef: { current: true }, sessionIdRef: { current: "a" }, extensionStatusEventVersion: { current: 0 },
     promptRunIdRef: { current: 1 }, contextUsageRequestIdRef: { current: 0 }, contextUsageAppliedIdRef: { current: 0 },
     agentRunningRef: { current: true }, sdkAgentActiveRef: { current: true }, rpcPromptPendingRef: { current: true },
     setContextUsage: (value) => writes.push(value),
@@ -114,9 +114,10 @@ test("only completed assistant messages trigger an immediate usage read", () => 
     script.runInNewContext({
       event: { type: "message_end", message: { role, content: [] } },
       agentRunningRef: { current: true }, sessionIdRef: { current: "a" }, optimisticUserMessageKeyRef: { current: null },
+      optimisticUserMessageRef: { current: null }, deliveredUserMessageRef: { current: null },
       isSystemMessageEvent: (event) => event.message.role === "system",
       normalizeToolCalls: (message) => message, userMessageKey: () => "user", setMessages() {}, dispatch() {}, setAgentPhase() {},
-      setToolClocks() {}, withoutToolClock: (clocks) => clocks,
+      setToolClocks() {}, withoutToolClock: (clocks) => clocks, setActiveToolResults() {},
       refreshContextUsage: (sid) => reads.push(sid),
     });
     assert.deepEqual(reads, role === "assistant" ? ["a"] : []);
