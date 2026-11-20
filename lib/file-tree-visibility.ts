@@ -1,5 +1,5 @@
 import { execFile } from "child_process";
-import { projectGitEnvironment } from "./git-environment";
+import { projectGitLaunchOptions } from "./git-environment";
 
 // ============================================================================
 // Which directory entries the file tree lists.
@@ -62,7 +62,7 @@ function runGit(
     const child = execFile(
       "git",
       ["-C", directory, ...GIT_SAFE_CONFIG, ...args],
-      { timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, env: projectGitEnvironment() },
+      { timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, ...projectGitLaunchOptions() },
       (error, stdout) => {
         const exitCode = error && typeof error.code === "number" ? error.code : error ? null : 0;
         resolve(exitCode !== null && okExitCodes.includes(exitCode) ? stdout : null);

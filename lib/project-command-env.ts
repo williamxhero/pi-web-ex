@@ -56,6 +56,25 @@ export function sanitizeProjectCommandEnvironment(
   return environment;
 }
 
+/** Git for Windows and its standard credential helpers must fail rather than prompt. */
+export function preventWindowsGitPrompts(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  if (platform !== "win32") return environment;
+  const overrides = {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_ASKPASS: "",
+    GCM_INTERACTIVE: "never",
+    SSH_ASKPASS_REQUIRE: "never",
+  };
+  const result = { ...environment };
+  for (const name of Object.keys(result)) {
+    if (Object.hasOwn(overrides, name.toUpperCase())) delete result[name];
+  }
+  return { ...result, ...overrides };
+}
+
 function withAgentBinDirectory(
   environment: NodeJS.ProcessEnv,
   agentBinDir: string,
@@ -92,10 +111,11 @@ export function createProjectCommandBashOperations(
         platform,
       );
       const { onData, signal, timeout } = executionOptions;
+      const canWarnAboutCleanup = platform === "win32" && !signal?.aborted;
       let released = false;
       const execution = localOperations.exec(command, cwd, {
         ...executionOptions,
-        env: environment,
+        env: preventWindowsGitPrompts(environment, platform),
         // Callers finalize their output once the command is released; a
         // survivor must not append to it afterwards.
         onData: (data) => {
@@ -122,11 +142,18 @@ export function createProjectCommandBashOperations(
           for (const timer of timers) clearTimeout(timer);
           signal?.removeEventListener("abort", onAbort);
         };
+        const rejectAndRelease = (error: unknown) => {
+          if (released) return;
+          // The SDK can settle without verifying detached or reparented children are gone.
+          if (canWarnAboutCleanup && error instanceof Error
+            && (error.message === "aborted" || error.message.startsWith("timeout:"))) {
+            onData(Buffer.from("\nWindows child-process cleanup could not be confirmed.\n"));
+          }
+          release();
+          reject(error);
+        };
         const releaseAfter = (delayMs: number, error: Error) => {
-          timers.push(setTimeout(() => {
-            release();
-            reject(error);
-          }, Math.min(delayMs, MAX_TIMER_DELAY_MS)));
+          timers.push(setTimeout(() => rejectAndRelease(error), Math.min(delayMs, MAX_TIMER_DELAY_MS)));
         };
         const onAbort = () => releaseAfter(abortSettleGraceMs, new Error("aborted"));
         if (timeoutMs !== undefined) {
@@ -135,10 +162,7 @@ export function createProjectCommandBashOperations(
         execution.then((result) => {
           release();
           resolve(result);
-        }, (error: unknown) => {
-          release();
-          reject(error);
-        });
+        }, rejectAndRelease);
         if (signal?.aborted) onAbort();
         else signal?.addEventListener("abort", onAbort, { once: true });
       });
@@ -222,6 +246,10 @@ function preferUserToolExtension(base: LoadExtensionsResult, hostPath: string, t
       && error.error === `Tool "${toolName}" conflicts with ${userToolOwner.path}`
     )),
   };
+}
+
+export function isProjectCommandShellExtension(path: string): boolean {
+  return path === HOST_EXTENSION_PATH || path === POWERSHELL_HOST_EXTENSION_PATH;
 }
 
 export function preferUserBashExtension(base: LoadExtensionsResult): LoadExtensionsResult {

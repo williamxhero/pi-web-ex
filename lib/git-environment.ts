@@ -1,4 +1,4 @@
-import { sanitizeProjectCommandEnvironment } from "./project-command-env";
+import { preventWindowsGitPrompts, sanitizeProjectCommandEnvironment } from "./project-command-env";
 
 /**
  * The environment of a git child that runs in the user's project folder: the
@@ -7,5 +7,10 @@ import { sanitizeProjectCommandEnvironment } from "./project-command-env";
  * config names (`core.fsmonitor`) and they inherit this environment.
  */
 export function projectGitEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return { ...sanitizeProjectCommandEnvironment(base), LC_ALL: "C" };
+  return preventWindowsGitPrompts({ ...sanitizeProjectCommandEnvironment(base), LC_ALL: "C" });
+}
+
+/** Defaults for direct, noninteractive background Git launches. */
+export function projectGitLaunchOptions() {
+  return { windowsHide: true, env: projectGitEnvironment() };
 }

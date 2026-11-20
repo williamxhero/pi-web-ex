@@ -42,6 +42,13 @@ import { createSubagentCodemodeExtension, createSubagentMcpExtensions } from "./
 import type { McpHost } from "./mcp-host";
 import { createSubagentMcpPolicyExtension } from "./mcp-read-only-policy";
 import { resolveShellTools } from "./powershell-settings";
+import {
+  createProjectCommandBashExtension,
+  createProjectCommandPowerShellExtension,
+  isProjectCommandShellExtension,
+  preferUserBashExtension,
+  preferUserPowerShellExtension,
+} from "./project-command-env";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { SubagentQueue } from "./subagent-queue";
 import { addWorktree, removeWorktree } from "./worktree";
@@ -612,7 +619,12 @@ export function createSubagentController(
             codemode: codemodeEnabled,
           })
         : undefined;
+      const extensionLoaderOptions = subagentExtensionLoaderOptions({ ...profile, mcp: mcpEnabled });
       const extensionFactories = [
+        ...(!chatOnly ? [
+          createProjectCommandBashExtension({ cwd: childCwd, settings: settingsManager }),
+          createProjectCommandPowerShellExtension({ cwd: childCwd }),
+        ] : []),
         ...(codemodeExtension ? [codemodeExtension] : []),
         ...(mcp ? [...mcp.extensions, createSubagentMcpPolicyExtension(() => mcpScope)] : []),
         ...(skillsBinding.loaderOptions.extensionFactories ?? []),
@@ -624,8 +636,11 @@ export function createSubagentController(
         modelRuntime: parentModelRuntime,
         settingsManager,
         resourceLoaderOptions: {
-          ...subagentExtensionLoaderOptions({ ...profile, mcp: mcpEnabled }),
+          ...extensionLoaderOptions,
           ...skillsBinding.loaderOptions,
+          extensionsOverride: (base) => preferUserPowerShellExtension(preferUserBashExtension(
+            extensionLoaderOptions.extensionsOverride?.(base) ?? base,
+          )),
           ...(extensionFactories.length > 0 ? { extensionFactories } : {}),
           noPromptTemplates: true,
           noThemes: true,
@@ -646,14 +661,18 @@ export function createSubagentController(
 
       // `ext:` selectors that `disallowed_tools` cancels out leave an empty list, which admits none.
       const allExtensionTools = profile.loadExtensions && profile.extensionTools === undefined;
+      // These replace SDK built-ins, so loading extensions does not grant either shell.
+      const selectableExtensions = services.resourceLoader.getExtensions().extensions.filter(
+        (extension) => !isProjectCommandShellExtension(extension.path),
+      );
       const extensionToolNames = profile.loadExtensions
         ? profile.extensionTools !== undefined
           ? selectSubagentExtensionTools(
-            services.resourceLoader.getExtensions().extensions,
+            selectableExtensions,
             profile.extensionTools,
             profile.disallowedExtensionTools,
           )
-          : services.resourceLoader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
+          : selectableExtensions.flatMap((extension) => [...extension.tools.keys()])
         : [];
       const activeTools = resolveShellTools(
         withSubagentExtensionTools(profile.tools, extensionToolNames),

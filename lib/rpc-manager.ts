@@ -3661,8 +3661,13 @@ export async function startRpcSession(
       exactSystemPrompt: subagentResources.exactSystemPrompt
         ?? (chatOnly ? subagentResources.appendSystemPrompt[0] ?? "" : undefined),
     }) : undefined;
+    const childExtensionLoaderOptions = subagentResources && subagentExtensionLoaderOptions(subagentResources);
     const subagentExtensionFactories = [
       llamaCppExtension,
+      ...(!chatOnly && subagentResources ? [
+        createProjectCommandBashExtension({ cwd: sessionCwd, settings: settingsManager }),
+        createProjectCommandPowerShellExtension({ cwd: sessionCwd }),
+      ] : []),
       ...(subagentCodemode ? [subagentCodemode] : []),
       ...(subagentMcp && subagentResources
         ? [...subagentMcp.extensions, createSubagentMcpPolicyExtension(() => subagentResources)]
@@ -3675,8 +3680,11 @@ export async function startRpcSession(
       settingsManager,
       resourceLoaderOptions: subagentResources
         ? {
-            ...subagentExtensionLoaderOptions(subagentResources),
+            ...childExtensionLoaderOptions,
             ...skillsBinding!.loaderOptions,
+            extensionsOverride: (base) => preferUserPowerShellExtension(preferUserBashExtension(
+              childExtensionLoaderOptions?.extensionsOverride?.(base) ?? base,
+            )),
             extensionFactories: subagentExtensionFactories,
             noPromptTemplates: true,
             noThemes: true,
