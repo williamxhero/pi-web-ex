@@ -14,17 +14,18 @@ console.log('Evidence directory: '+out);
 const logPath=join(out,'managed-browser-server.log');
 writeFileSync(logPath,'',{flag:'wx'});
 const mode=process.argv[2] ?? 'stop';
-assert.ok(['stop','failure','success','t44','restart','restart-cleanup'].includes(mode), 'Expected stop, failure, success, t44, restart or restart-cleanup');
+assert.ok(['stop','failure','interaction','success','t44','restart','restart-cleanup'].includes(mode), 'Expected stop, failure, interaction, success, t44, restart or restart-cleanup');
 const tmp=mkdtempSync(join(out,'managed-')), agent=join(tmp,'agent'), cwd=join(tmp,'project'), marker=join(cwd,'pid.txt');
 mkdirSync(join(agent,'agents'),{recursive:true}); mkdirSync(cwd);
-writeFileSync(join(cwd,'nested-process.cjs'), "require('node:fs').writeFileSync('nested.pid',String(process.pid));setTimeout(()=>{},65000);");
+writeFileSync(join(cwd,'nested-process.cjs'), "require('node:fs').writeFileSync('nested.pid',String(process.pid));setInterval(()=>console.log('managed fixture still running'),350).unref();setTimeout(()=>{},65000);");
 const json=(file,data)=>writeFileSync(join(agent,file),JSON.stringify(data));
 json('agents/settings.json',{builtInEnabled:true});
 json('settings.json',{defaultProvider:'acceptance',defaultModel:'fixture',defaultTools:['read','powershell','edit','write']});
 writeFileSync(join(agent,'agents','pid-check.md'),'---\nname: pid-check\ndescription: Loopback PID fixture\ntools: powershell\nload_extensions: false\nload_skills: false\n---\nRun the supplied local fixture.\n');
 const task='Managed PID acceptance child', reply='Parent finished before child command';
 let release; const gate=new Promise(r=>release=r);
-let delegated=false, childRequest=false, server, browser;
+let delegated=false, childRequest=false, server, browser, sentinel, authServer;
+let interactionCommand, authRequests=0, unauthorized=0;
 const useT44=mode==='t44';
 const t44=process.env.PI_WEB_ACCEPTANCE_T44_RUNNER?.replaceAll("'","''");
 assert.ok(!useT44||t44,'Supply PI_WEB_ACCEPTANCE_T44_RUNNER for the isolated, offline T44 runner');
@@ -44,7 +45,7 @@ const model=createServer(async(req,res)=>{
     console.log('loopback model tools:',names.join(','));
     let delta;
     if(names.includes('Agent')&&!delegated){delegated=true;delta={tool_calls:[tool('call_managed_acceptance','Agent',{description:task,subagent_type:'pid-check',prompt:'Run the PID fixture',run_in_background:true})]};}
-    else if(!names.includes('Agent')&&names.includes('powershell')&&!childRequest){childRequest=true; await gate; delta={tool_calls:[tool('call_pid_fixture','powershell',{command:'Set-Content -LiteralPath pid.txt -Value $PID; '+appCommand,...(useT44?{timeout:195}:{})})]};}
+    else if(!names.includes('Agent')&&names.includes('powershell')&&!childRequest){childRequest=true; await gate; delta={tool_calls:[tool('call_pid_fixture','powershell',{command:'Set-Content -LiteralPath pid.txt -Value $PID; '+(interactionCommand??appCommand),...(useT44?{timeout:195}:mode==='interaction'?{timeout:12}:{})})]};}
     else delta={content:names.includes('Agent')?reply:'Fixture ended'};
     res.writeHead(200,{'content-type':'text/event-stream'});
     for(const choice of [{delta:{role:'assistant',...delta},finish_reason:null},{delta:{},finish_reason:delta.tool_calls?'tool_calls':'stop'}]) res.write(`data: ${JSON.stringify({id:'fixture',object:'chat.completion.chunk',model:'fixture',choices:[{index:0,...choice}]})}\n\n`);
@@ -54,6 +55,12 @@ const model=createServer(async(req,res)=>{
 async function listen(s){s.listen(0,'127.0.0.1'); await once(s,'listening');return s.address().port;}
 async function retry(name,fn,ms=18000){const end=Date.now()+ms;let last;while(Date.now()<end){try{const v=await fn();if(v)return v;}catch(e){last=e;} await delay(250);}throw new Error('Timeout: '+name,{cause:last});}
 try {
+ if(mode==='interaction'){
+   authServer=createServer((_req,res)=>{authRequests++;unauthorized++;res.writeHead(401,{'www-authenticate':'Basic realm="pi-web-fixture"'}).end();});
+   const authPort=await listen(authServer);
+   writeFileSync(join(cwd,'git-config-empty'),'');
+   interactionCommand=`$env:GIT_CONFIG_NOSYSTEM='1'; $env:GIT_CONFIG_GLOBAL=(Join-Path (Get-Location) 'git-config-empty'); & git -c credential.helper= ls-remote http://127.0.0.1:${authPort}/test.git; exit $LASTEXITCODE`;
+ }
  const modelPort=await listen(model);
  json('models.json',{providers:{acceptance:{baseUrl:`http://127.0.0.1:${modelPort}/v1`,api:'openai-completions',apiKey:'ONLY_A_LOCAL_PLACEHOLDER',models:[{id:'fixture'}]}}});
  const probe=createServer(), port=await listen(probe);await new Promise(r=>probe.close(r));
@@ -132,17 +139,22 @@ try {
    }
    await page.getByText(task,{exact:true}).last().click();
    await page.waitForURL(url=>url.searchParams.get('session')===child);
+   await page.getByText(/managed fixture still running/).first().waitFor();
+   sentinel=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{cwd,windowsHide:true,stdio:'ignore'});
+   await once(sentinel,'spawn');
+   assert.ok(alive(sentinel.pid),'independent sentinel must be alive before Stop');
    await page.getByTitle(/^(Stop agent|停止 Agent)$/i).click();
    await retry('cancelled child and both owned processes gone',async()=>{
      const row=(await api('/api/sessions')).sessions.find(x=>x.id===child), snap=await api('/api/agent/running');
      return row?.relation?.status==='aborted'&&row.relation.processCleanupUnconfirmed===true&&!snap.runningSessionIds.includes(child)&&!snap.subagentsActiveSessionIds.includes(parent)&&!alive(pid)&&!alive(nested);
    });
+   assert.ok(alive(sentinel.pid),'Stop must not kill the independent sentinel');
    const afterStop=await api(`/api/sessions/${child}`);
    assert.equal(afterStop.info?.relation?.processCleanupUnconfirmed,true);
    await page.goto(base+'/?session='+parent,{waitUntil:'domcontentloaded',timeout:16000});
    await page.getByRole('button',{name:/^Agents/i}).first().click();
    await page.getByRole('option').filter({hasText:task}).getByText(/process cleanup unconfirmed|进程清理未确认|程序清理未確認/i).waitFor();
-   console.log('PASS Agents reload and browser Stop; unconfirmed cleanup displayed; shell and nested PIDs exited:',pid,nested);
+   console.log('PASS Agents reload and browser Stop; unconfirmed cleanup displayed; shell and nested PIDs exited; unrelated process survived:',pid,nested,sentinel.pid);
    }
  }else{
    const final=await retry('managed command completed',async()=>{
@@ -157,6 +169,13 @@ try {
      assert.equal(result.isError,true);
      assert.equal(final.relation.status,'failed');
      for(const token of ['fixture-stdout','fixture-stderr','Command exited with code 7'])assert.ok(text.includes(token),text);
+   }else if(mode==='interaction'){
+     assert.ok(authRequests>0&&unauthorized===authRequests,'the fixture must issue a real authentication challenge');
+     assert.equal(final.relation.status,'failed');
+     assert.equal(result.isError,true);
+     assert.match(text,/terminal prompts disabled/i);
+     assert.match(text,/Command exited with code \d+/);
+     console.log('PASS local Git authentication challenge failed noninteractively; requests:',authRequests);
    }else{
      assert.equal(final.relation.status,'completed');
      assert.ok(!result.isError,text);
@@ -166,6 +185,8 @@ try {
  }
 }finally{
  release();await browser?.close();
+ if(sentinel?.pid&&sentinel.exitCode===null&&sentinel.signalCode===null){const done=once(sentinel,'exit');sentinel.kill();await done;}
+ authServer?.closeAllConnections();authServer?.close();
  if(server?.pid&&server.exitCode===null)spawnSync('taskkill.exe',['/pid',String(server.pid),'/t','/f'],{windowsHide:true,stdio:'ignore',timeout:5000});
  model.closeAllConnections();model.close();log.end();rmSync(tmp,{recursive:true,force:true,maxRetries:4,retryDelay:200});
 }

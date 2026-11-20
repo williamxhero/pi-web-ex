@@ -21,6 +21,7 @@ import {
   preferUserBashExtension,
   preferUserPowerShellExtension,
 } from "./project-command-env";
+import { beginProjectCommandRun } from "./project-command-evidence";
 import { cacheSessionPath, catalogFirstMessage, getLatestModelChange, invalidateSessionListCache, invalidateSessionManagerCache, invalidateSessionPathCache, readLatestSessionEntryId, resolveSessionPath } from "./session-reader";
 import { computeLiveSessionTotalActiveMs } from "./session-timing";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
@@ -178,7 +179,7 @@ type AgentSessionWrapperOptions = {
   onAgentRunComplete?: AgentRunCompleteListener;
   suppressCompletionNotifications?: boolean;
   /** A subagent's wrapper: a run ended and nothing is left to do. */
-  onDirectTurnSettled?: (aborted: boolean) => void;
+  onDirectTurnSettled?: (aborted: boolean, from: number) => void;
   /** Connects the session's MCP servers before a prompt starts a run, and lets go of them when it closes (lib/mcp-host.ts). */
   mcpHost?: WrapperMcpHost;
   /** Chat only: the extension-provided model the session wanted, named when a prompt finds no model. */
@@ -403,7 +404,8 @@ export class AgentSessionWrapper {
   private readonly exactSystemPrompt?: () => string;
   private readonly chatOnly: boolean;
   private readonly onAgentRunComplete?: AgentRunCompleteListener;
-  private readonly onDirectTurnSettled?: (aborted: boolean) => void;
+  private readonly onDirectTurnSettled?: (aborted: boolean, from: number) => void;
+  private directTurnFrom = 0;
   private readonly suppressCompletionNotifications: boolean;
   private readonly mcpHost?: WrapperMcpHost;
   private readonly chatOnlyExtensionModel?: { provider: string; id: string };
@@ -662,6 +664,10 @@ export class AgentSessionWrapper {
       this.lastEventType = typeof event.type === "string" ? event.type : null;
       this.lastEventAt = Date.now();
       if (event.type === "agent_start") {
+        if (this.onDirectTurnSettled && !this.agentRunNeedsCompletion) {
+          this.directTurnFrom = this.inner.sessionManager.getEntries().length;
+          beginProjectCommandRun(this.inner.sessionManager);
+        }
         this.agentRunNeedsCompletion = true;
         this.lastRunAborted = false;
       }
@@ -786,7 +792,7 @@ export class AgentSessionWrapper {
     if (!this.agentRunNeedsCompletion || this.isRunning()) return;
     this.agentRunNeedsCompletion = false;
     try {
-      this.onDirectTurnSettled?.(this.lastRunAborted);
+      this.onDirectTurnSettled?.(this.lastRunAborted, this.directTurnFrom);
     } catch (error) {
       console.error("[pi-web] could not settle the subagent turn:", error instanceof Error ? error.message : error);
     }
@@ -3001,7 +3007,7 @@ const SUBAGENT_CONTROLLER = createSubagentController({
         : {}),
       chatOnly: options?.chatOnly,
       suppressCompletionNotifications: true,
-      onDirectTurnSettled: (aborted) => SUBAGENT_CONTROLLER.settleDirectTurn(inner.sessionId, aborted),
+      onDirectTurnSettled: (aborted, from) => SUBAGENT_CONTROLLER.settleDirectTurn(inner.sessionId, aborted, from),
       ...(options?.mcpHost ? { mcpHost: options.mcpHost } : {}),
     });
     registerRpcWrapper(wrapper);
@@ -3884,7 +3890,7 @@ export async function startRpcSession(
       },
       suppressCompletionNotifications: Boolean(subagentResources) || isSideChat,
       ...(subagentResources
-        ? { onDirectTurnSettled: (aborted: boolean) => SUBAGENT_CONTROLLER.settleDirectTurn(inner.sessionId, aborted) }
+        ? { onDirectTurnSettled: (aborted: boolean, from: number) => SUBAGENT_CONTROLLER.settleDirectTurn(inner.sessionId, aborted, from) }
         : {}),
       ...(mcpHost ? { mcpHost } : {}),
       ...(chatOnlyExtensionModel ? { chatOnlyExtensionModel } : {}),

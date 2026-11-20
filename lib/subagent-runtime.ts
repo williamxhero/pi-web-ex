@@ -49,7 +49,7 @@ import {
   preferUserBashExtension,
   preferUserPowerShellExtension,
 } from "./project-command-env";
-import { PROJECT_COMMAND_CLEANUP_UNCONFIRMED, PROJECT_COMMAND_OUTCOME } from "./project-command-evidence";
+import { beginProjectCommandRun, takeProjectCommandRun, PROJECT_COMMAND_CLEANUP_UNCONFIRMED, PROJECT_COMMAND_OUTCOME, type ProjectCommandOutcome } from "./project-command-evidence";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { SubagentQueue } from "./subagent-queue";
 import { addWorktree, removeWorktree } from "./worktree";
@@ -88,7 +88,7 @@ export interface SubagentController {
   steer(sessionId: string, message: string): Promise<void>;
   abort(sessionId: string): Promise<void>;
   /** A turn in a child's own chat ended: settles the run a restart cut off, if that is what the file holds. */
-  settleDirectTurn(sessionId: string, aborted: boolean): void;
+  settleDirectTurn(sessionId: string, aborted: boolean, from?: number): void;
 }
 
 type StoredSubagentExecution = {
@@ -169,7 +169,11 @@ function unconfirmedCleanup(entries: readonly RunEntry[], from: number): { proce
     : {};
 }
 
-function managedCommandFailure(entries: readonly RunEntry[], from: number): string | undefined {
+function managedCommandFailure(entries: readonly RunEntry[], from: number, live?: ReadonlyMap<string, ProjectCommandOutcome>): string | undefined {
+  if (live) {
+    const failed = [...live.values()].findLast((outcome) => outcome.failed);
+    return failed && projectCommandFailureText(failed.exitCode);
+  }
   const seen = new Set<string>();
   for (let i = entries.length - 1; i >= from; i -= 1) {
     const entry = entries[i];
@@ -177,11 +181,14 @@ function managedCommandFailure(entries: readonly RunEntry[], from: number): stri
     const { key, failed, exitCode } = entry.data as { key?: unknown; failed?: unknown; exitCode?: unknown };
     if (typeof key !== "string" || typeof failed !== "boolean" || seen.has(key)) continue;
     seen.add(key);
-    if (failed) return typeof exitCode === "number"
-      ? `Project command exited with code ${exitCode}. See the command output.`
-      : "Project command failed. See the command output.";
+    if (failed) return projectCommandFailureText(exitCode);
   }
   return undefined;
+}
+
+function projectCommandFailureText(exitCode: unknown): string {
+  return typeof exitCode === "number" ? `Project command exited with code ${exitCode}. See the command output.`
+    : "Project command failed. See the command output.";
 }
 
 /**
@@ -900,16 +907,19 @@ export function createSubagentController(
         }
         let result: SubagentRunInfo;
         const runStart = sessionManager.getEntries().length;
+        beginProjectCommandRun(sessionManager);
+        let evidence: ReturnType<typeof takeProjectCommandRun>;
         try {
           if (childSession && !childSession.isAlive()) throw new Error(CLOSED_BEFORE_RUN);
           await prepareChildMcp(childSession, stored);
           await inner.prompt(delegatedTask, { source: "rpc" });
+          evidence = takeProjectCommandRun(sessionManager);
           const text = runResultText(sessionManager, runStart);
           const stop = stored.abortRequested ? undefined : lastAssistantStop(sessionManager);
           const aborted = stored.abortRequested || stop?.aborted === true;
           const errorMessage = aborted ? undefined : stop?.error ??
             (maxTurnsReached && turnLimit ? turnLimitError(turnLimit, undelivered) : undefined) ??
-            managedCommandFailure(sessionManager.getEntries(), runStart);
+            managedCommandFailure(sessionManager.getEntries(), runStart, evidence?.outcomes);
           result = {
             ...initialRun,
             status: aborted ? "aborted" : errorMessage ? "failed" : "completed",
@@ -930,6 +940,7 @@ export function createSubagentController(
               : {}),
           };
         } finally {
+          evidence ??= takeProjectCommandRun(sessionManager);
           if (turnLimit) {
             inner.agent.finishTurn = previousFinishTurn;
             inner.agent.steeringMode = previousSteeringMode;
@@ -940,7 +951,8 @@ export function createSubagentController(
 
         const cleanupError = await cleanupWorktree(parent.cwd, isolatedWorktree);
         if (cleanupError) result = { ...result, worktreeCleanupError: cleanupError };
-        result = recordResult(sessionManager, { ...result, ...unconfirmedCleanup(sessionManager.getEntries(), runStart) });
+        result = recordResult(sessionManager, { ...result, ...unconfirmedCleanup(sessionManager.getEntries(), runStart),
+          ...(evidence?.cleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
         stored.run = result;
         request.onUpdate?.(result);
         getSubagentRuns().delete(initialRun.sessionId);
@@ -1083,14 +1095,17 @@ export function createSubagentController(
       let result: SubagentRunInfo;
       // Earlier runs' messages are on the same branch; only this run's answers are its result.
       const runStart = manager.getEntries().length;
+      beginProjectCommandRun(manager);
+      let evidence: ReturnType<typeof takeProjectCommandRun>;
       try {
         if (!wrapper!.isAlive()) throw new Error(CLOSED_BEFORE_RUN);
         await prepareChildMcp(wrapper, stored);
         await wrapper!.inner.prompt(request.task, { source: "rpc" });
+        evidence = takeProjectCommandRun(manager);
         const text = runResultText(manager, runStart);
         const stop = stored.abortRequested ? undefined : lastAssistantStop(manager);
         const aborted = stored.abortRequested || stop?.aborted === true;
-        const errorMessage = aborted ? undefined : stop?.error ?? managedCommandFailure(manager.getEntries(), runStart);
+        const errorMessage = aborted ? undefined : stop?.error ?? managedCommandFailure(manager.getEntries(), runStart, evidence?.outcomes);
         result = {
           ...initialRun,
           status: aborted ? "aborted" : errorMessage ? "failed" : "completed",
@@ -1108,9 +1123,11 @@ export function createSubagentController(
           ...(!stored.abortRequested && !request.signal?.aborted ? { error: error instanceof Error ? error.message : String(error) } : {}),
         };
       } finally {
+        evidence ??= takeProjectCommandRun(manager);
         request.signal?.removeEventListener("abort", handleParentAbort);
       }
-      result = recordResult(manager, { ...result, ...unconfirmedCleanup(manager.getEntries(), runStart) });
+      result = recordResult(manager, { ...result, ...unconfirmedCleanup(manager.getEntries(), runStart),
+        ...(evidence?.cleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
       stored.run = result;
       request.onUpdate?.(result);
       getSubagentRuns().delete(request.sessionId);
@@ -1282,27 +1299,28 @@ export function createSubagentController(
     await wrapper.inner.abort();
   }
 
-  function settleDirectTurn(sessionId: string, aborted: boolean): void {
+  function settleDirectTurn(sessionId: string, aborted: boolean, from?: number): void {
     // A run in the map records its own result, and a settled run keeps its report.
     if (getSubagentRuns().has(sessionId)) return;
     const wrapper = dependencies.getSession(sessionId);
     if (!wrapper?.isAlive()) return;
     const manager = wrapper.inner.sessionManager;
+    const evidence = takeProjectCommandRun(manager);
     const run = readSubagentRun(manager.getEntries() as unknown as SessionEntry[], sessionId, wrapper.sessionFile);
     if (!run || (run.status !== "running" && run.status !== "queued")) return;
     const text = wrapper.inner.getLastAssistantText()?.trim();
     const stop = aborted ? undefined : lastAssistantStop(manager);
     const entries = manager.getEntries();
-    // A directly prompted child with an interrupted run has no live run boundary.
-    const from = entries.findLastIndex((entry) => entry.type === "message" && entry.message.role === "user") + 1;
-    const error = aborted || stop?.aborted ? undefined : stop?.error ?? managedCommandFailure(entries, from);
+    const start = from ?? entries.length;
+    const error = aborted || stop?.aborted ? undefined : stop?.error ?? managedCommandFailure(entries, start, evidence?.outcomes);
     recordResult(manager, {
       ...run,
       status: aborted || stop?.aborted ? "aborted" : error ? "failed" : "completed",
       completedAt: new Date().toISOString(),
       ...(text ? { result: text } : {}),
       ...(error ? { error } : {}),
-      ...unconfirmedCleanup(entries, from),
+      ...unconfirmedCleanup(entries, start),
+      ...(evidence?.cleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}),
     });
     dependencies.invalidateSessionList();
   }

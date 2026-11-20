@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { PROJECT_COMMAND_CLEANUP_UNCONFIRMED, PROJECT_COMMAND_OUTCOME } from "./project-command-evidence";
+import { projectCommandEvidence, type ProjectCommandOutcome } from "./project-command-evidence";
 
 const HOST_EXTENSION_NAME = "pi-web-project-command-environment";
 const HOST_EXTENSION_PATH = `<inline:${HOST_EXTENSION_NAME}>`;
@@ -20,8 +20,6 @@ const POWERSHELL_HOST_EXTENSION_PATH = `<inline:${POWERSHELL_HOST_EXTENSION_NAME
 // Pi's own abort path settles well within this once the process tree is gone.
 const ABORT_SETTLE_GRACE_MS = 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
-
-type ProjectCommandOutcome = { key: string; exitCode?: number; failed: boolean };
 
 function reportDiagnostic(report: () => void): void {
   try { report(); }
@@ -221,12 +219,13 @@ export function createProjectCommandBashExtension(options: {
         // `defaultTools` leaves out (#1235).
         defaultActive: false,
         execute(toolCallId, params, signal, onUpdate, context) {
+          const evidence = projectCommandEvidence(context?.sessionManager, (type, data) => pi.appendEntry(type, data));
           const executionDefinition = createBashToolDefinition(options.cwd, {
             commandPrefix: options.settings.getShellCommandPrefix(),
             operations: createProjectCommandBashOperations({
               shellPath: options.settings.getShellPath(),
-              commandSource: { shell: "bash", record: (outcome) => pi.appendEntry(PROJECT_COMMAND_OUTCOME, outcome) },
-              onCleanupUnconfirmed: () => pi.appendEntry(PROJECT_COMMAND_CLEANUP_UNCONFIRMED),
+              commandSource: { shell: "bash", record: evidence.record },
+              onCleanupUnconfirmed: evidence.cleanupUnconfirmed,
             }),
           });
           return executionDefinition.execute(toolCallId, params, signal, onUpdate, context);
@@ -252,11 +251,12 @@ export function createProjectCommandPowerShellExtension(options: { cwd: string }
         // Active only when named (`defaultTools`, the PowerShell switch, a preset), as pi's own is (#1235).
         defaultActive: false,
         execute(toolCallId, params, signal, onUpdate, context) {
+          const evidence = projectCommandEvidence(context?.sessionManager, (type, data) => pi.appendEntry(type, data));
           const executionDefinition = createPowerShellToolDefinition(options.cwd, {
             operations: createProjectCommandBashOperations({
               localOperations: createLocalPowerShellOperations(),
-              commandSource: { shell: "powershell", record: (outcome) => pi.appendEntry(PROJECT_COMMAND_OUTCOME, outcome) },
-              onCleanupUnconfirmed: () => pi.appendEntry(PROJECT_COMMAND_CLEANUP_UNCONFIRMED),
+              commandSource: { shell: "powershell", record: evidence.record },
+              onCleanupUnconfirmed: evidence.cleanupUnconfirmed,
             }),
           });
           return executionDefinition.execute(toolCallId, params, signal, onUpdate, context);
