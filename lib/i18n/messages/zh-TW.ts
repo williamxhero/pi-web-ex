@@ -694,6 +694,8 @@ export const zhTWLocale: LocalePlugin = {
     "files.hiddenIgnored": "已被 Git 忽略",
     "files.hiddenExcluded": "預設隱藏（產生或相依目錄）",
     "files.insertPath": "將路徑插入聊天",
+    "files.copyPath": "複製完整路徑",
+    "files.pathCopied": "已複製路徑",
     "files.mention": "提及",
     "files.download": "下載檔案",
     "files.binary": "二進位",

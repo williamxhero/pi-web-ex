@@ -20,6 +20,7 @@ import {
 } from "@/lib/file-types";
 import { encodeFilePathForApi, getFileDirectory, getFileName, getRelativeFilePath } from "@/lib/file-paths";
 import { FILE_WATCH_HEARTBEAT_MS, fileVersion, fileVersionChanged } from "@/lib/file-version";
+import { copyText } from "@/lib/clipboard";
 import { injectSandboxedHtmlPolyfill } from "@/lib/html-sandbox-polyfill";
 import { HIDDEN_PAGE_GRACE_MS, usePageHiddenFor } from "@/hooks/usePageHidden";
 import { pageId, trackEventSource } from "@/lib/page-debug";
@@ -151,6 +152,23 @@ function MentionIcon() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="12" cy="12" r="4" />
       <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" />
+    </svg>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="20 6 9 17 4 12" />
     </svg>
   );
 }
@@ -1380,6 +1398,8 @@ function TextFileViewer({
   });
   const onStateChangeRef = useRef(onStateChange);
   const [selectedLineRange, setSelectedLineRange] = useState<SelectedLineRange | null>(null);
+  const [pathCopied, setPathCopied] = useState(false);
+  const pathCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Whole file for an HTML preview whose source view is still chunked.
   const [htmlFull, setHtmlFull] = useState<{ text?: string; error?: string } | null>(null);
 
@@ -1757,6 +1777,20 @@ function TextFileViewer({
     );
   }, [cwd, filePath, onMentionLines]);
 
+  const copyFilePath = useCallback(() => {
+    // A refused copy is silent: no "Copied", and the rejection is handled
+    // so it never surfaces as an unhandled one (lib/clipboard.ts).
+    void copyText(filePath).then(() => {
+      if (pathCopyTimerRef.current) clearTimeout(pathCopyTimerRef.current);
+      setPathCopied(true);
+      pathCopyTimerRef.current = setTimeout(() => setPathCopied(false), 1400);
+    }, () => {});
+  }, [filePath]);
+
+  useEffect(() => () => {
+    if (pathCopyTimerRef.current) clearTimeout(pathCopyTimerRef.current);
+  }, []);
+
   useEffect(() => {
     if (!onMentionLines || displayMode !== "source") return;
 
@@ -1959,6 +1993,17 @@ function TextFileViewer({
           )}
 
           <div className="file-viewer-actions">
+            <button
+              type="button"
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={copyFilePath}
+              title={pathCopied ? t("files.pathCopied") : t("files.copyPath")}
+              aria-label={pathCopied ? t("files.pathCopied") : t("files.copyPath")}
+              className="file-viewer-icon-button"
+              style={pathCopied ? { color: "var(--accent)" } : undefined}
+            >
+              {pathCopied ? <CheckIcon /> : <CopyIcon />}
+            </button>
             {(onAtMention || onMentionLines) && (
               <button
                 type="button"

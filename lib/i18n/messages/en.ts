@@ -694,6 +694,8 @@ export const enLocale: LocalePlugin = {
     "files.hiddenIgnored": "Ignored by Git",
     "files.hiddenExcluded": "Hidden by default (generated or dependency folder)",
     "files.insertPath": "Insert path into chat",
+    "files.copyPath": "Copy full path",
+    "files.pathCopied": "Path copied",
     "files.mention": "mention",
     "files.download": "Download file",
     "files.binary": "binary",
