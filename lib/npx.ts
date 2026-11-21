@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { nodeCliInvocation } from "./node-cli";
+import { silentCommandLaunch } from "./command-launch";
 import { sanitizeProjectCommandEnvironment } from "./project-command-env";
 
 const execFileAsync = promisify(execFile);
@@ -34,6 +35,7 @@ export function npxEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.Pr
 export async function runNpx(args: string[], opts: RunNpxOptions = {}): Promise<RunNpxResult> {
   const { command, args: commandArgs } = nodeCliInvocation("npx", args);
   return execFileAsync(command, commandArgs, {
+    ...silentCommandLaunch,
     timeout: opts.timeout,
     cwd: opts.cwd,
     env: npxEnvironment(),

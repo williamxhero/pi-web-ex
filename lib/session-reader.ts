@@ -260,7 +260,7 @@ function mapScannedSession(
       : catalogFirstMessage(scanned.firstMessage || "(no messages)"),
     parentSessionId: originSessionId,
     ...(subagent
-      ? { relation: { kind: "subagent" as const, parentSessionId: subagent.parentSessionId, profile: subagent.profile, description: subagent.description, status: subagent.status } }
+      ? { relation: { kind: "subagent" as const, parentSessionId: subagent.parentSessionId, profile: subagent.profile, description: subagent.description, status: subagent.status, ...(subagent.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true as const } : {}) } }
       : side
         ? { relation: { kind: "side" as const, ...side } }
         : scanned.parentSessionPath

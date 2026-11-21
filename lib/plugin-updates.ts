@@ -10,6 +10,8 @@ import {
 import { gt, maxSatisfying, rcompare, valid, validRange } from "semver";
 import type { PluginScope, PluginUpdateResult } from "@/lib/api-types";
 import { nodeCliInvocation } from "./node-cli";
+import { silentCommandLaunch } from "./command-launch";
+import { projectGitLaunchOptions } from "./git-environment";
 import { parseNpmSource } from "./npm-source";
 import { sanitizeProjectCommandEnvironment } from "./project-command-env";
 import { getProjectTrustStatus } from "./project-trust";
@@ -99,9 +101,11 @@ async function runCommand(
   // A bare `npm` resolves to `npm.cmd` on Windows, which `execFile` cannot
   // spawn (CVE-2024-27980); run the bundled `npm-cli.js` through `node`.
   const invocation = command === "npm" ? nodeCliInvocation("npm", args) : { command, args };
+  const env = updateCheckEnvironment(options.env);
+  const launch = command === "git" ? projectGitLaunchOptions(env) : { ...silentCommandLaunch, env };
   const { stdout } = await execFileAsync(invocation.command, invocation.args, {
+    ...launch,
     cwd: options.cwd,
-    env: updateCheckEnvironment(options.env),
     encoding: "utf8",
     timeout: 10_000,
   });

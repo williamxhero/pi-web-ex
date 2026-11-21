@@ -29,10 +29,15 @@ export class AgentCommandError extends Error {
  * notice, so the refusal adds none.
  */
 export const EXTENSION_REPORTED_CODE = "extension_reported";
+export const MANAGED_RUN_CONFLICT_CODE = "managed_run_conflict";
+
+export function isManagedRunConflict(error: unknown): boolean {
+  return error instanceof AgentCommandError && error.code === MANAGED_RUN_CONFLICT_CODE;
+}
 
 export function isPromptRejectedError(error: unknown): error is AgentCommandError {
   return error instanceof AgentCommandError
-    && error.code === "prompt_rejected"
+    && (error.code === "prompt_rejected" || error.code === MANAGED_RUN_CONFLICT_CODE)
     && error.accepted === false;
 }
 

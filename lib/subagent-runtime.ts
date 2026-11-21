@@ -42,6 +42,14 @@ import { createSubagentCodemodeExtension, createSubagentMcpExtensions } from "./
 import type { McpHost } from "./mcp-host";
 import { createSubagentMcpPolicyExtension } from "./mcp-read-only-policy";
 import { resolveShellTools } from "./powershell-settings";
+import {
+  createProjectCommandBashExtension,
+  createProjectCommandPowerShellExtension,
+  isProjectCommandShellExtension,
+  preferUserBashExtension,
+  preferUserPowerShellExtension,
+} from "./project-command-env";
+import { beginProjectCommandRun, takeProjectCommandRun, PROJECT_COMMAND_CLEANUP_UNCONFIRMED, PROJECT_COMMAND_OUTCOME, type ProjectCommandOutcome } from "./project-command-evidence";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { SubagentQueue } from "./subagent-queue";
 import { addWorktree, removeWorktree } from "./worktree";
@@ -54,6 +62,7 @@ interface HostSession {
   readonly cwd: string;
   isAlive(): boolean;
   isRunning(): boolean;
+  isDirectPromptArriving?(): boolean;
   waitUntilReady(): Promise<void>;
   /**
    * Connect the session's MCP servers before a run prompts the SDK session directly, past the
@@ -80,7 +89,7 @@ export interface SubagentController {
   steer(sessionId: string, message: string): Promise<void>;
   abort(sessionId: string): Promise<void>;
   /** A turn in a child's own chat ended: settles the run a restart cut off, if that is what the file holds. */
-  settleDirectTurn(sessionId: string, aborted: boolean): void;
+  settleDirectTurn(sessionId: string, aborted: boolean, from?: number): void;
 }
 
 type StoredSubagentExecution = {
@@ -109,6 +118,7 @@ type ParentNotification = Pick<SubagentRunInfo, "sessionId" | "parentSessionId" 
 
 declare global {
   var __piSubagentRuns: Map<string, StoredSubagentExecution> | undefined;
+  var __piSubagentResumes: Set<string> | undefined;
   var __piSubagentQueue: SubagentQueue<SubagentRunInfo> | undefined;
   var __piSubagentConsumedResults: Map<string, string> | undefined;
   var __piSubagentParentNotifications: Set<ParentNotification> | undefined;
@@ -153,7 +163,35 @@ function messageText(message: RunMessage): string {
     .join("").trim();
 }
 
-type RunEntry = { type?: unknown; id?: unknown; targetId?: unknown; replacement?: { content?: unknown } | null; message?: RunMessage };
+type RunEntry = { type?: unknown; id?: unknown; targetId?: unknown; replacement?: { content?: unknown } | null; message?: RunMessage; customType?: unknown; data?: unknown };
+
+function unconfirmedCleanup(entries: readonly RunEntry[], from: number): { processCleanupUnconfirmed?: true } {
+  return entries.slice(from).some((entry) => entry.type === "custom" && entry.customType === PROJECT_COMMAND_CLEANUP_UNCONFIRMED)
+    ? { processCleanupUnconfirmed: true }
+    : {};
+}
+
+function managedCommandFailure(entries: readonly RunEntry[], from: number, live?: ReadonlyMap<string, ProjectCommandOutcome>): string | undefined {
+  if (live) {
+    const failed = [...live.values()].findLast((outcome) => outcome.failed);
+    return failed && projectCommandFailureText(failed.exitCode);
+  }
+  const seen = new Set<string>();
+  for (let i = entries.length - 1; i >= from; i -= 1) {
+    const entry = entries[i];
+    if (entry?.type !== "custom" || entry.customType !== PROJECT_COMMAND_OUTCOME || !entry.data || typeof entry.data !== "object") continue;
+    const { key, failed, exitCode } = entry.data as { key?: unknown; failed?: unknown; exitCode?: unknown };
+    if (typeof key !== "string" || typeof failed !== "boolean" || seen.has(key)) continue;
+    seen.add(key);
+    if (failed) return projectCommandFailureText(exitCode);
+  }
+  return undefined;
+}
+
+function projectCommandFailureText(exitCode: unknown): string {
+  return typeof exitCode === "number" ? `Project command exited with code ${exitCode}. See the command output.`
+    : "Project command failed. See the command output.";
+}
 
 /**
  * A run's report: the text of every assistant message the run appended (entries from `from` on)
@@ -411,8 +449,35 @@ function settleOrphanedRun(run: SubagentRunInfo): SubagentRunInfo {
 }
 
 /** The status of a run this process still holds, so a listing does not have to guess from its file. */
+// Shared with direct chat admission, including while resume is still reopening the child.
+function subagentResumeReservations(): Set<string> {
+  return globalThis.__piSubagentResumes ??= new Set();
+}
+
+export function blocksDirectSubagentMessage(sessionId: string): boolean {
+  return subagentResumeReservations().has(sessionId) || getSubagentRuns().has(sessionId);
+}
+
 export function getLiveSubagentStatus(sessionId: string): SubagentRunInfo["status"] | undefined {
   return getSubagentRuns().get(sessionId)?.run.status;
+}
+
+// Failed appends are not durable. Keep the true outcome for the lifetime of this server,
+// separately from the active run registry so it cannot keep a worker or its descendants live.
+const MAX_UNSAVED_SUBAGENT_RESULTS = 128;
+const unsavedSubagentResults = new Map<string, SubagentRunInfo>();
+
+export function forgetUnsavedSubagentResult(sessionId: string): void {
+  unsavedSubagentResults.delete(sessionId);
+}
+
+export function getUnsavedSubagentResult(sessionId: string): SubagentRunInfo | undefined {
+  const result = unsavedSubagentResults.get(sessionId);
+  if (result && !existsSync(result.sessionPath)) {
+    forgetUnsavedSubagentResult(sessionId);
+    return undefined;
+  }
+  return result;
 }
 
 function findSubagentModel(runtime: ModelRuntime, reference: string) {
@@ -517,11 +582,39 @@ function recordResult(sessionManager: SessionManager, run: SubagentRunInfo): Sub
     completedAt: recorded.completedAt!,
     ...(recorded.result ? { result: recorded.result } : {}),
     ...(recorded.error ? { error: recorded.error } : {}),
+    ...(recorded.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}),
     ...(recorded.worktreeCleanupError ? { worktreeCleanupError: recorded.worktreeCleanupError } : {}),
     ...(recorded.worktreeExists !== undefined ? { worktreeExists: recorded.worktreeExists } : {}),
   };
-  sessionManager.appendCustomEntry(SUBAGENT_RESULT_TYPE, entry);
+  try {
+    sessionManager.appendCustomEntry(SUBAGENT_RESULT_TYPE, entry);
+    unsavedSubagentResults.delete(run.sessionId);
+  } catch {
+    unsavedSubagentResults.set(run.sessionId, recorded);
+    if (unsavedSubagentResults.size > MAX_UNSAVED_SUBAGENT_RESULTS) {
+      const oldest = unsavedSubagentResults.keys().next().value;
+      if (oldest !== undefined) unsavedSubagentResults.delete(oldest);
+    }
+    console.warn("[pi-web] Could not persist subagent result; retained in this server only:", run.sessionId);
+  }
   return recorded;
+}
+
+function reportRunUpdate(request: { onUpdate?: (run: SubagentRunInfo) => void }, run: SubagentRunInfo): void {
+  try { request.onUpdate?.(run); }
+  catch { console.warn("[pi-web] Subagent status observer failed:", run.sessionId, run.status); }
+}
+
+function recordTransitionFailure(manager: SessionManager, stored: StoredSubagentExecution, error: unknown, cleanupError?: string): SubagentRunInfo {
+  const result = recordResult(manager, {
+    ...stored.run,
+    status: "failed",
+    completedAt: new Date().toISOString(),
+    error: error instanceof Error ? error.message : String(error),
+    ...(cleanupError ? { worktreeCleanupError: cleanupError } : {}),
+  });
+  stored.run = result;
+  return result;
 }
 
 export function createSubagentController(
@@ -612,7 +705,12 @@ export function createSubagentController(
             codemode: codemodeEnabled,
           })
         : undefined;
+      const extensionLoaderOptions = subagentExtensionLoaderOptions({ ...profile, mcp: mcpEnabled });
       const extensionFactories = [
+        ...(!chatOnly ? [
+          createProjectCommandBashExtension({ cwd: childCwd, settings: settingsManager }),
+          createProjectCommandPowerShellExtension({ cwd: childCwd }),
+        ] : []),
         ...(codemodeExtension ? [codemodeExtension] : []),
         ...(mcp ? [...mcp.extensions, createSubagentMcpPolicyExtension(() => mcpScope)] : []),
         ...(skillsBinding.loaderOptions.extensionFactories ?? []),
@@ -624,8 +722,11 @@ export function createSubagentController(
         modelRuntime: parentModelRuntime,
         settingsManager,
         resourceLoaderOptions: {
-          ...subagentExtensionLoaderOptions({ ...profile, mcp: mcpEnabled }),
+          ...extensionLoaderOptions,
           ...skillsBinding.loaderOptions,
+          extensionsOverride: (base) => preferUserPowerShellExtension(preferUserBashExtension(
+            extensionLoaderOptions.extensionsOverride?.(base) ?? base,
+          )),
           ...(extensionFactories.length > 0 ? { extensionFactories } : {}),
           noPromptTemplates: true,
           noThemes: true,
@@ -646,14 +747,18 @@ export function createSubagentController(
 
       // `ext:` selectors that `disallowed_tools` cancels out leave an empty list, which admits none.
       const allExtensionTools = profile.loadExtensions && profile.extensionTools === undefined;
+      // These replace SDK built-ins, so loading extensions does not grant either shell.
+      const selectableExtensions = services.resourceLoader.getExtensions().extensions.filter(
+        (extension) => !isProjectCommandShellExtension(extension.path),
+      );
       const extensionToolNames = profile.loadExtensions
         ? profile.extensionTools !== undefined
           ? selectSubagentExtensionTools(
-            services.resourceLoader.getExtensions().extensions,
+            selectableExtensions,
             profile.extensionTools,
             profile.disallowedExtensionTools,
           )
-          : services.resourceLoader.getExtensions().extensions.flatMap((extension) => [...extension.tools.keys()])
+          : selectableExtensions.flatMap((extension) => [...extension.tools.keys()])
         : [];
       const activeTools = resolveShellTools(
         withSubagentExtensionTools(profile.tools, extensionToolNames),
@@ -715,16 +820,6 @@ export function createSubagentController(
         ...(thinking ? { thinkingLevel: thinking as ThinkingLevel } : {}),
         ...subagentToolOptions({ tools: activeTools, allExtensionTools, mcp: mcpEnabled }),
       });
-      persistChildSession(sessionManager);
-      skillsBinding.setActiveToolsGetter(() => inner.getActiveToolNames());
-      const childSession = dependencies.registerSession(inner, {
-        ...(skillsBinding.getExactSystemPrompt !== undefined
-          ? { exactSystemPrompt: skillsBinding.getExactSystemPrompt }
-          : {}),
-        chatOnly,
-        ...(mcp?.mcpHost ? { mcpHost: mcp.mcpHost } : {}),
-      });
-
       const initialRun: SubagentRunInfo = {
         sessionId: inner.sessionId,
         sessionPath: inner.sessionFile ?? sessionManager.getSessionFile() ?? "",
@@ -739,6 +834,48 @@ export function createSubagentController(
         ...(isolatedWorktree ? { worktreePath: isolatedWorktree.path, worktreeBranch: isolatedWorktree.branch } : {}),
       };
 
+      let childSession: HostSession | void;
+      let persisted = false;
+      try {
+        persistChildSession(sessionManager);
+        persisted = true;
+        skillsBinding.setActiveToolsGetter(() => inner.getActiveToolNames());
+        childSession = dependencies.registerSession(inner, {
+          ...(skillsBinding.getExactSystemPrompt !== undefined
+            ? { exactSystemPrompt: skillsBinding.getExactSystemPrompt }
+            : {}),
+          chatOnly,
+          ...(mcp?.mcpHost ? { mcpHost: mcp.mcpHost } : {}),
+        });
+      } catch (error) {
+        inner.dispose();
+        mcp?.mcpHost?.dispose();
+        const worktreePath = isolatedWorktree?.path;
+        const cleanupError = await cleanupWorktree(parent.cwd, isolatedWorktree);
+        isolatedWorktree = undefined;
+        if (persisted) {
+          // No worker was queued. Keep the persisted attempt as a failure, not an orphaned run.
+          try {
+            recordResult(sessionManager, {
+              ...initialRun,
+              status: "failed",
+              completedAt: new Date().toISOString(),
+              error: error instanceof Error ? error.message : String(error),
+              ...(cleanupError ? { worktreeCleanupError: cleanupError } : {}),
+            });
+          } catch (recordError) {
+            console.error("[pi-web] failed to record subagent registration failure:", recordError);
+          } finally {
+            dependencies.invalidateSessionList();
+          }
+        }
+        if (cleanupError) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`${message}\nCould not clean up the worktree at ${worktreePath}; inspect it before removing it.`, { cause: error });
+        }
+        throw error;
+      }
+
       let resolveCompletion!: (run: SubagentRunInfo) => void;
       const completion = new Promise<SubagentRunInfo>((resolve) => { resolveCompletion = resolve; });
       const stored: StoredSubagentExecution = {
@@ -748,7 +885,7 @@ export function createSubagentController(
         dispatchedAt: Date.now(),
       };
       getSubagentRuns().set(initialRun.sessionId, stored);
-      request.onUpdate?.(initialRun);
+      reportRunUpdate(request, initialRun);
       dependencies.invalidateSessionList();
 
       const handleParentAbort = () => {
@@ -774,15 +911,11 @@ export function createSubagentController(
             ...(cleanupError ? { worktreeCleanupError: cleanupError } : {}),
           });
           stored.run = result;
-          request.onUpdate?.(result);
+          reportRunUpdate(request, result);
           getSubagentRuns().delete(initialRun.sessionId);
           dependencies.invalidateSessionList();
           return result;
         }
-        stored.run = { ...stored.run, status: "running" };
-        sessionManager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running" });
-        request.onUpdate?.(stored.run);
-        dependencies.invalidateSessionList();
         let turnCount = 0;
         let maxTurnsReached = false;
         let undelivered: string[] = [];
@@ -826,15 +959,23 @@ export function createSubagentController(
         }
         let result: SubagentRunInfo;
         const runStart = sessionManager.getEntries().length;
+        beginProjectCommandRun(sessionManager);
+        let evidence: ReturnType<typeof takeProjectCommandRun>;
         try {
           if (childSession && !childSession.isAlive()) throw new Error(CLOSED_BEFORE_RUN);
+          sessionManager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running" });
+          stored.run = { ...stored.run, status: "running" };
+          reportRunUpdate(request, stored.run);
+          dependencies.invalidateSessionList();
           await prepareChildMcp(childSession, stored);
           await inner.prompt(delegatedTask, { source: "rpc" });
+          evidence = takeProjectCommandRun(sessionManager);
           const text = runResultText(sessionManager, runStart);
           const stop = stored.abortRequested ? undefined : lastAssistantStop(sessionManager);
           const aborted = stored.abortRequested || stop?.aborted === true;
           const errorMessage = aborted ? undefined : stop?.error ??
-            (maxTurnsReached && turnLimit ? turnLimitError(turnLimit, undelivered) : undefined);
+            (maxTurnsReached && turnLimit ? turnLimitError(turnLimit, undelivered) : undefined) ??
+            managedCommandFailure(sessionManager.getEntries(), runStart, evidence?.outcomes);
           result = {
             ...initialRun,
             status: aborted ? "aborted" : errorMessage ? "failed" : "completed",
@@ -855,6 +996,7 @@ export function createSubagentController(
               : {}),
           };
         } finally {
+          evidence ??= takeProjectCommandRun(sessionManager);
           if (turnLimit) {
             inner.agent.finishTurn = previousFinishTurn;
             inner.agent.steeringMode = previousSteeringMode;
@@ -865,9 +1007,10 @@ export function createSubagentController(
 
         const cleanupError = await cleanupWorktree(parent.cwd, isolatedWorktree);
         if (cleanupError) result = { ...result, worktreeCleanupError: cleanupError };
-        result = recordResult(sessionManager, result);
+        result = recordResult(sessionManager, { ...result, ...unconfirmedCleanup(sessionManager.getEntries(), runStart),
+          ...(evidence?.cleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
         stored.run = result;
-        request.onUpdate?.(result);
+        reportRunUpdate(request, result);
         getSubagentRuns().delete(initialRun.sessionId);
         dependencies.invalidateSessionList();
         return result;
@@ -887,7 +1030,7 @@ export function createSubagentController(
           const cleanupError = await cleanupWorktree(parent.cwd, isolatedWorktree);
           const finalResult = recordResult(sessionManager, cleanupError ? { ...result, worktreeCleanupError: cleanupError } : result);
           stored.run = finalResult;
-          request.onUpdate?.(finalResult);
+          reportRunUpdate(request, finalResult);
           getSubagentRuns().delete(initialRun.sessionId);
           dependencies.invalidateSessionList();
           resolveCompletion(finalResult);
@@ -905,7 +1048,7 @@ export function createSubagentController(
             if (state === "queued") {
               sessionManager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "queued" });
             }
-            request.onUpdate?.({ ...stored.run, status: state });
+            reportRunUpdate(request, { ...stored.run, status: state });
             stored.run = { ...stored.run, status: state };
             dependencies.invalidateSessionList();
           },
@@ -913,8 +1056,13 @@ export function createSubagentController(
         );
       } catch (error) {
         request.signal?.removeEventListener("abort", handleParentAbort);
-        if (dropSubagentRun(initialRun.sessionId, stored)) dependencies.invalidateSessionList();
-        throw error;
+        const cleanupError = await cleanupWorktree(parent.cwd, isolatedWorktree);
+        const result = recordTransitionFailure(sessionManager, stored, error, cleanupError);
+        dropSubagentRun(initialRun.sessionId, stored);
+        dependencies.invalidateSessionList();
+        reportRunUpdate(request, result);
+        resolveCompletion(result);
+        return { run: result, completion };
       }
       stored.cancelQueued = queued.cancel;
       if (stored.abortRequested) queued.cancel();
@@ -933,6 +1081,20 @@ export function createSubagentController(
   }
 
   async function resume(request: ResumeSubagentRequest): Promise<SubagentExecution> {
+    const wrapper = dependencies.getSession(request.sessionId);
+    if (blocksDirectSubagentMessage(request.sessionId) || wrapper?.isDirectPromptArriving?.()) {
+      throw new Error("Subagent is already running or resuming");
+    }
+    const reservations = subagentResumeReservations();
+    reservations.add(request.sessionId);
+    try {
+      return await resumeReserved(request);
+    } finally {
+      reservations.delete(request.sessionId);
+    }
+  }
+
+  async function resumeReserved(request: ResumeSubagentRequest): Promise<SubagentExecution> {
     const enabled = dependencies.isBuiltInSubagentsEnabled ?? isBuiltInSubagentsEnabled;
     if (!enabled()) throw new Error("Pi Web built-in sub-agents are disabled");
     const parentSessionId = request.parentContext.sessionManager.getSessionId();
@@ -980,8 +1142,9 @@ export function createSubagentController(
     let resolveCompletion!: (run: SubagentRunInfo) => void;
     const completion = new Promise<SubagentRunInfo>((resolve) => { resolveCompletion = resolve; });
     const stored: StoredSubagentExecution = { run: initialRun, completion, abortRequested: false, dispatchedAt: Date.now() };
+    unsavedSubagentResults.delete(request.sessionId);
     getSubagentRuns().set(request.sessionId, stored);
-    request.onUpdate?.(initialRun);
+    reportRunUpdate(request, initialRun);
     dependencies.invalidateSessionList();
     const handleParentAbort = () => {
       stored.abortRequested = true;
@@ -1002,26 +1165,31 @@ export function createSubagentController(
         resolveCompletion(result);
         return result;
       }
-      stored.run = { ...stored.run, status: "running" };
-      manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running" });
-      request.onUpdate?.(stored.run);
       let result: SubagentRunInfo;
       // Earlier runs' messages are on the same branch; only this run's answers are its result.
       const runStart = manager.getEntries().length;
+      let evidence: ReturnType<typeof takeProjectCommandRun>;
       try {
         if (!wrapper!.isAlive()) throw new Error(CLOSED_BEFORE_RUN);
+        if (wrapper!.isRunning() || wrapper!.isDirectPromptArriving?.()) throw new Error("Subagent is already running");
+        manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running",
+          ...(initialRun.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
+        stored.run = { ...stored.run, status: "running" };
+        reportRunUpdate(request, stored.run);
+        beginProjectCommandRun(manager);
         await prepareChildMcp(wrapper, stored);
         await wrapper!.inner.prompt(request.task, { source: "rpc" });
+        evidence = takeProjectCommandRun(manager);
         const text = runResultText(manager, runStart);
         const stop = stored.abortRequested ? undefined : lastAssistantStop(manager);
         const aborted = stored.abortRequested || stop?.aborted === true;
-        const providerError = aborted ? undefined : stop?.error;
+        const errorMessage = aborted ? undefined : stop?.error ?? managedCommandFailure(manager.getEntries(), runStart, evidence?.outcomes);
         result = {
           ...initialRun,
-          status: aborted ? "aborted" : providerError ? "failed" : "completed",
+          status: aborted ? "aborted" : errorMessage ? "failed" : "completed",
           completedAt: new Date().toISOString(),
           ...(text ? { result: text } : {}),
-          ...(providerError ? { error: providerError } : {}),
+          ...(errorMessage ? { error: errorMessage } : {}),
         };
       } catch (error) {
         const text = runResultText(manager, runStart);
@@ -1033,11 +1201,13 @@ export function createSubagentController(
           ...(!stored.abortRequested && !request.signal?.aborted ? { error: error instanceof Error ? error.message : String(error) } : {}),
         };
       } finally {
+        evidence ??= takeProjectCommandRun(manager);
         request.signal?.removeEventListener("abort", handleParentAbort);
       }
-      result = recordResult(manager, result);
+      result = recordResult(manager, { ...result, ...unconfirmedCleanup(manager.getEntries(), runStart),
+        ...(evidence?.cleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
       stored.run = result;
-      request.onUpdate?.(result);
+      reportRunUpdate(request, result);
       getSubagentRuns().delete(request.sessionId);
       dependencies.invalidateSessionList();
       return result;
@@ -1054,7 +1224,7 @@ export function createSubagentController(
       try {
         const result = recordResult(manager, { ...initialRun, status: "aborted", completedAt: new Date().toISOString() });
         stored.run = result;
-        request.onUpdate?.(result);
+        reportRunUpdate(request, result);
         getSubagentRuns().delete(request.sessionId);
         dependencies.invalidateSessionList();
         resolveCompletion(result);
@@ -1065,15 +1235,20 @@ export function createSubagentController(
     let queued: ReturnType<SubagentQueue<SubagentRunInfo>["enqueue"]>;
     try {
       queued = getSubagentQueue().enqueue(parentSessionId, readSubagentSettings().maxConcurrent, execute, (state) => {
-        if (state === "queued") manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "queued" });
+        if (state === "queued") manager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "queued",
+          ...(initialRun.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}) });
         stored.run = { ...stored.run, status: state };
-        request.onUpdate?.(stored.run);
+        reportRunUpdate(request, stored.run);
         dependencies.invalidateSessionList();
       }, finishQueuedAbort);
     } catch (error) {
       request.signal?.removeEventListener("abort", handleParentAbort);
-      if (dropSubagentRun(request.sessionId, stored)) dependencies.invalidateSessionList();
-      throw error;
+      const result = recordTransitionFailure(manager, stored, error);
+      dropSubagentRun(request.sessionId, stored);
+      dependencies.invalidateSessionList();
+      reportRunUpdate(request, result);
+      resolveCompletion(result);
+      return { run: result, completion };
     }
     stored.cancelQueued = queued.cancel;
     if (stored.abortRequested) queued.cancel();
@@ -1087,6 +1262,8 @@ export function createSubagentController(
   async function get(sessionId: string): Promise<SubagentRunInfo | null> {
     const stored = getSubagentRuns().get(sessionId);
     if (stored) return stored.run;
+    const unsaved = getUnsavedSubagentResult(sessionId);
+    if (unsaved) return unsaved;
     const wrapper = dependencies.getSession(sessionId);
     if (wrapper?.isAlive()) {
       const run = readSubagentRun(
@@ -1207,22 +1384,28 @@ export function createSubagentController(
     await wrapper.inner.abort();
   }
 
-  function settleDirectTurn(sessionId: string, aborted: boolean): void {
+  function settleDirectTurn(sessionId: string, aborted: boolean, from?: number): void {
     // A run in the map records its own result, and a settled run keeps its report.
     if (getSubagentRuns().has(sessionId)) return;
     const wrapper = dependencies.getSession(sessionId);
     if (!wrapper?.isAlive()) return;
     const manager = wrapper.inner.sessionManager;
+    const evidence = takeProjectCommandRun(manager);
     const run = readSubagentRun(manager.getEntries() as unknown as SessionEntry[], sessionId, wrapper.sessionFile);
     if (!run || (run.status !== "running" && run.status !== "queued")) return;
     const text = wrapper.inner.getLastAssistantText()?.trim();
     const stop = aborted ? undefined : lastAssistantStop(manager);
+    const entries = manager.getEntries();
+    const start = from ?? entries.length;
+    const error = aborted || stop?.aborted ? undefined : stop?.error ?? managedCommandFailure(entries, start, evidence?.outcomes);
     recordResult(manager, {
       ...run,
-      status: aborted || stop?.aborted ? "aborted" : stop?.error ? "failed" : "completed",
+      status: aborted || stop?.aborted ? "aborted" : error ? "failed" : "completed",
       completedAt: new Date().toISOString(),
       ...(text ? { result: text } : {}),
-      ...(stop?.error ? { error: stop.error } : {}),
+      ...(error ? { error } : {}),
+      ...unconfirmedCleanup(entries, start),
+      ...(evidence?.cleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}),
     });
     dependencies.invalidateSessionList();
   }

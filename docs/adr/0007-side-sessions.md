@@ -54,7 +54,11 @@ task or losing the parent's context.
    the copy ends on a `custom_message` with `display: false`, which pi sends as a user
    turn on every provider, worded as a note from the app. This is Codex's boundary. The
    prompt stays the parent's, apart from pi updating the tool and rule sections to
-   match the tools, and a Chat-only side chat keeps its exact prompt.
+   match the tools, and a Chat-only side chat keeps its exact prompt. In this fork,
+   the managed automation policy follows the effective prompt at the saved fork
+   boundary (including compaction checkpoints), not a historical raw message or
+   later side-chat turns. Opening a branch that did not carry the policy does not
+   add it.
 
 5. **Cache.** On a model with native mid-conversation updates (Claude Opus 4.8, 5, 5.5,
    Sonnet 5.5, Haiku 5.5, Fable; GPT-5.4 and later add their tools the same way) the

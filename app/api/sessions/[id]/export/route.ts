@@ -7,6 +7,7 @@ import { promisify } from "util";
 import { fileURLToPath, pathToFileURL } from "url";
 import { NextResponse } from "next/server";
 import { resolveSessionPath } from "@/lib/session-reader";
+import { silentCommandLaunch } from "@/lib/command-launch";
 
 const execFileAsync = promisify(execFile);
 
@@ -82,6 +83,7 @@ async function exportSession(filePath: string, outputPath: string): Promise<void
   const cliPath = await getPiCliPath();
   if (cliPath) {
     await execFileAsync(process.execPath, [cliPath, "--export", filePath, outputPath], {
+      ...silentCommandLaunch,
       cwd: process.cwd(),
       timeout: 30_000,
       env: {

@@ -355,7 +355,9 @@ function AgentRow({
           ) : (
             <>
               <StatusIcon status={status} />
-              <span>{t(`agentSwitcher.status.${status}`)}</span>
+              <span>{!running && relation?.processCleanupUnconfirmed
+                ? t("agentSwitcher.status.cleanupUnconfirmed", { status: t(`agentSwitcher.status.${status}`) })
+                : t(`agentSwitcher.status.${status}`)}</span>
             </>
           )}
         </span>

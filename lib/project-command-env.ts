@@ -9,6 +9,8 @@ import {
   type LoadExtensionsResult,
 } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { projectCommandEvidence, type ProjectCommandOutcome } from "./project-command-evidence";
 
 const HOST_EXTENSION_NAME = "pi-web-project-command-environment";
 const HOST_EXTENSION_PATH = `<inline:${HOST_EXTENSION_NAME}>`;
@@ -19,6 +21,11 @@ const POWERSHELL_HOST_EXTENSION_PATH = `<inline:${POWERSHELL_HOST_EXTENSION_NAME
 const ABORT_SETTLE_GRACE_MS = 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
+function reportDiagnostic(report: () => void): void {
+  try { report(); }
+  catch (error) { console.warn("Could not record project command diagnostic:", error instanceof Error ? error.message : String(error)); }
+}
+
 type ProjectShellSettings = {
   getShellCommandPrefix(): string | undefined;
   getShellPath(): string | undefined;
@@ -26,6 +33,8 @@ type ProjectShellSettings = {
 
 type ProjectCommandBashOperationsOptions = {
   abortSettleGraceMs?: number;
+  onCleanupUnconfirmed?: () => void;
+  commandSource?: { shell: "bash" | "powershell"; record: (outcome: ProjectCommandOutcome) => void };
   agentBinDir?: string;
   baseEnvironment?: NodeJS.ProcessEnv;
   localOperations?: BashOperations;
@@ -56,6 +65,28 @@ export function sanitizeProjectCommandEnvironment(
   return environment;
 }
 
+/** Git for Windows and its standard credential helpers must fail rather than prompt. */
+export function preventWindowsGitPrompts(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  if (platform !== "win32") return environment;
+  const overrides = {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_ASKPASS: "",
+    GCM_INTERACTIVE: "never",
+    // OpenSSH must use askpass rather than a terminal. The Windows null device
+    // cannot launch an interactive helper, including when a default one is installed.
+    SSH_ASKPASS_REQUIRE: "force",
+    SSH_ASKPASS: "NUL",
+  };
+  const result = { ...environment };
+  for (const name of Object.keys(result)) {
+    if (Object.hasOwn(overrides, name.toUpperCase())) delete result[name];
+  }
+  return { ...result, ...overrides };
+}
+
 function withAgentBinDirectory(
   environment: NodeJS.ProcessEnv,
   agentBinDir: string,
@@ -78,6 +109,8 @@ export function createProjectCommandBashOperations(
 ): BashOperations {
   const {
     abortSettleGraceMs = ABORT_SETTLE_GRACE_MS,
+    onCleanupUnconfirmed,
+    commandSource,
     agentBinDir = join(getAgentDir(), "bin"),
     baseEnvironment = process.env,
     localOperations = createLocalBashOperations({ shellPath: options.shellPath }),
@@ -85,28 +118,46 @@ export function createProjectCommandBashOperations(
   } = options;
 
   return {
-    exec(command, cwd, executionOptions) {
+    async exec(command, cwd, executionOptions) {
       const environment = withAgentBinDirectory(
         sanitizeProjectCommandEnvironment(executionOptions.env ?? baseEnvironment, platform),
         agentBinDir,
         platform,
       );
       const { onData, signal, timeout } = executionOptions;
+      const canWarnAboutCleanup = platform === "win32" && !signal?.aborted;
+      const record = (result?: BashExecResult) => {
+        if (!commandSource) return;
+        // A successful exact retry can replace the prior outcome, without storing the command again.
+        const key = createHash("sha256").update(JSON.stringify([commandSource.shell, cwd, command])).digest("hex");
+        const exitCode = result?.exitCode;
+        reportDiagnostic(() => commandSource.record({ key, failed: exitCode !== 0, ...(typeof exitCode === "number" ? { exitCode } : {}) }));
+      };
       let released = false;
-      const execution = localOperations.exec(command, cwd, {
+      const execute = async () => localOperations.exec(command, cwd, {
         ...executionOptions,
-        env: environment,
+        env: preventWindowsGitPrompts(environment, platform),
         // Callers finalize their output once the command is released; a
         // survivor must not append to it afterwards.
         onData: (data) => {
           if (!released) onData(data);
         },
       });
+      const execution = execute();
       // Pi rejects any other timeout before it starts the command.
       const timeoutMs = typeof timeout === "number" && Number.isFinite(timeout) && timeout > 0
         ? timeout * 1000
         : undefined;
-      if (!signal && timeoutMs === undefined) return execution;
+      if (!signal && timeoutMs === undefined) {
+        try {
+          const result = await execution;
+          record(result);
+          return result;
+        } catch (error) {
+          record();
+          throw error;
+        }
+      }
 
       // On Stop or a timeout, pi kills the shell's process tree but then keeps
       // reading until every inherited stdout/stderr handle falls idle. A
@@ -122,23 +173,31 @@ export function createProjectCommandBashOperations(
           for (const timer of timers) clearTimeout(timer);
           signal?.removeEventListener("abort", onAbort);
         };
+        const rejectAndRelease = (error: unknown) => {
+          if (released) return;
+          release();
+          // The SDK can settle without verifying detached or reparented children are gone.
+          if (canWarnAboutCleanup && error instanceof Error
+            && (error.message === "aborted" || error.message.startsWith("timeout:"))) {
+            if (onCleanupUnconfirmed) reportDiagnostic(onCleanupUnconfirmed);
+            reportDiagnostic(() => onData(Buffer.from("\nWindows child-process cleanup could not be confirmed.\n")));
+          }
+          if (!(error instanceof Error && error.message === "aborted")) record();
+          reject(error);
+        };
         const releaseAfter = (delayMs: number, error: Error) => {
-          timers.push(setTimeout(() => {
-            release();
-            reject(error);
-          }, Math.min(delayMs, MAX_TIMER_DELAY_MS)));
+          timers.push(setTimeout(() => rejectAndRelease(error), Math.min(delayMs, MAX_TIMER_DELAY_MS)));
         };
         const onAbort = () => releaseAfter(abortSettleGraceMs, new Error("aborted"));
         if (timeoutMs !== undefined) {
           releaseAfter(timeoutMs + abortSettleGraceMs, new Error(`timeout:${timeout}`));
         }
         execution.then((result) => {
+          if (released) return;
           release();
+          record(result);
           resolve(result);
-        }, (error: unknown) => {
-          release();
-          reject(error);
-        });
+        }, rejectAndRelease);
         if (signal?.aborted) onAbort();
         else signal?.addEventListener("abort", onAbort, { once: true });
       });
@@ -163,10 +222,13 @@ export function createProjectCommandBashExtension(options: {
         // `defaultTools` leaves out (#1235).
         defaultActive: false,
         execute(toolCallId, params, signal, onUpdate, context) {
+          const evidence = projectCommandEvidence(context?.sessionManager, (type, data) => pi.appendEntry(type, data));
           const executionDefinition = createBashToolDefinition(options.cwd, {
             commandPrefix: options.settings.getShellCommandPrefix(),
             operations: createProjectCommandBashOperations({
               shellPath: options.settings.getShellPath(),
+              commandSource: { shell: "bash", record: evidence.record },
+              onCleanupUnconfirmed: evidence.cleanupUnconfirmed,
             }),
           });
           return executionDefinition.execute(toolCallId, params, signal, onUpdate, context);
@@ -192,9 +254,12 @@ export function createProjectCommandPowerShellExtension(options: { cwd: string }
         // Active only when named (`defaultTools`, the PowerShell switch, a preset), as pi's own is (#1235).
         defaultActive: false,
         execute(toolCallId, params, signal, onUpdate, context) {
+          const evidence = projectCommandEvidence(context?.sessionManager, (type, data) => pi.appendEntry(type, data));
           const executionDefinition = createPowerShellToolDefinition(options.cwd, {
             operations: createProjectCommandBashOperations({
               localOperations: createLocalPowerShellOperations(),
+              commandSource: { shell: "powershell", record: evidence.record },
+              onCleanupUnconfirmed: evidence.cleanupUnconfirmed,
             }),
           });
           return executionDefinition.execute(toolCallId, params, signal, onUpdate, context);
@@ -222,6 +287,10 @@ function preferUserToolExtension(base: LoadExtensionsResult, hostPath: string, t
       && error.error === `Tool "${toolName}" conflicts with ${userToolOwner.path}`
     )),
   };
+}
+
+export function isProjectCommandShellExtension(path: string): boolean {
+  return path === HOST_EXTENSION_PATH || path === POWERSHELL_HOST_EXTENSION_PATH;
 }
 
 export function preferUserBashExtension(base: LoadExtensionsResult): LoadExtensionsResult {

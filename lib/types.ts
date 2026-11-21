@@ -376,6 +376,7 @@ export interface SessionInfo {
         profile: string;
         description: string;
         status: SubagentSessionStatus;
+        processCleanupUnconfirmed?: true;
       }
     | { kind: "side"; parentSessionId: string };
   /** Main repo root shared by all worktrees of this cwd (cwd itself for non-git dirs).

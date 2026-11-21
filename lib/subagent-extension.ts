@@ -129,6 +129,7 @@ export interface SubagentToolDetails {
   worktreePath?: string;
   worktreeBranch?: string;
   worktreeCleanupError?: string;
+  processCleanupUnconfirmed?: true;
 }
 
 export interface StartSubagentRequest {
@@ -195,6 +196,7 @@ export function subagentToolDetails(run: SubagentRunInfo): SubagentToolDetails {
     createdAt: run.createdAt,
     ...(run.completedAt ? { completedAt: run.completedAt } : {}),
     ...(run.error ? { error: run.error } : {}),
+    ...(run.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}),
     ...(run.worktreePath ? { worktreePath: run.worktreePath } : {}),
     ...(run.worktreeBranch ? { worktreeBranch: run.worktreeBranch } : {}),
     ...(run.worktreeCleanupError ? { worktreeCleanupError: run.worktreeCleanupError } : {}),
@@ -223,7 +225,8 @@ export function subagentFinalText(run: SubagentRunInfo): string {
   // Keep the session ID in the text: the model only sees `content`, never `details`, and needs it for `resume` / `get_subagent_result`.
   // The worktree line follows the status, before the subagent's own words.
   const worktree = worktreeOutcomeText(run);
-  const withWorktree = (status: string) => worktree ? `${status}\n\n${worktree}` : status;
+  const cleanup = run.processCleanupUnconfirmed ? "Windows child-process cleanup could not be confirmed." : undefined;
+  const withWorktree = (status: string) => [status, cleanup, worktree].filter(Boolean).join("\n\n");
   if (run.status === "completed") {
     const result = run.result?.trim();
     return result
@@ -278,6 +281,7 @@ export function createSubagentExtension(
           "Use Agent for a focused task that benefits from an isolated context.",
           "Use multiple background Agent calls in the same response for independent parallel work.",
           "Do not duplicate work already delegated to a running subagent.",
+          "Use Pi Web's managed Agent for independent delegation. If dispatch is unavailable or fails, do not launch a separate Pi or another unmanaged agent. Run a suitable short command in this session and wait for it only if the current tools permit it; otherwise report that delegation could not start.",
         ],
         executionMode: "parallel",
         parameters: Type.Object({
@@ -358,6 +362,14 @@ export function createSubagentExtension(
               onUpdate: update,
                 });
 
+            const initial = latestRun ?? execution.run;
+            if (execution.run.runInBackground && TERMINAL_SUBAGENT_STATUSES.has(initial.status)) {
+              return {
+                content: [{ type: "text", text: subagentFinalText(initial) }],
+                details: subagentToolDetails(initial),
+                ...(initial.status === "failed" ? { isError: true } : {}),
+              };
+            }
             if (execution.run.runInBackground) {
               notifyOnCompletion(execution);
               return {
@@ -381,7 +393,7 @@ export function createSubagentExtension(
             };
           } catch (error) {
             return {
-              content: [{ type: "text", text: withSubagentCandidates(error instanceof Error ? error.message : String(error), ctx?.sessionManager) }],
+              content: [{ type: "text", text: `${withSubagentCandidates(error instanceof Error ? error.message : String(error), ctx?.sessionManager)}\nDo not launch a separate Pi or other unmanaged agent. If a short command can do the work with the current tools, run it here and wait for it; otherwise report the delegation failure.` }],
               details: undefined,
               isError: true,
             };

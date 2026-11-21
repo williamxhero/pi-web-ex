@@ -1,12 +1,13 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, SettingsManager, Theme, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
+import { buildSessionContext as buildSdkSessionContext, createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, SettingsManager, Theme, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
 import { existsSync, realpathSync, writeFileSync } from "fs";
 import { resolve } from "path";
 import { isDeepStrictEqual } from "util";
 import { validateAgentImages } from "./image-attachments";
-import { EXTENSION_REPORTED_CODE } from "./agent-client";
+import { EXTENSION_REPORTED_CODE, MANAGED_RUN_CONFLICT_CODE } from "./agent-client";
 import { cwdMissingError } from "./missing-cwd";
 import { invalidateModelsCache } from "./models-cache";
 import { invalidateModelRuntimeWithExtensions } from "./model-runtime";
@@ -21,6 +22,8 @@ import {
   preferUserBashExtension,
   preferUserPowerShellExtension,
 } from "./project-command-env";
+import { beginProjectCommandRun, PROJECT_COMMAND_CLEANUP_UNCONFIRMED } from "./project-command-evidence";
+import { MANAGED_AUTOMATION_POLICY } from "./managed-automation-policy";
 import { cacheSessionPath, catalogFirstMessage, getLatestModelChange, invalidateSessionListCache, invalidateSessionManagerCache, invalidateSessionPathCache, readLatestSessionEntryId, resolveSessionPath } from "./session-reader";
 import { computeLiveSessionTotalActiveMs } from "./session-timing";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
@@ -58,8 +61,8 @@ import {
   readSideRelation,
   sideToolNames,
 } from "./side-session";
-import { SIDE_SESSION_NAME, sideChatNameFrom } from "./session-family";
-import { createSubagentController, getLiveSubagentStatus, hasUnsettledSubagentRun } from "./subagent-runtime";
+import { SIDE_BOUNDARY_MESSAGE_TYPE, SIDE_SESSION_NAME, sideChatNameFrom } from "./session-family";
+import { blocksDirectSubagentMessage, createSubagentController, getLiveSubagentStatus, getUnsavedSubagentResult, hasUnsettledSubagentRun } from "./subagent-runtime";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import { resolveShellTools } from "./powershell-settings";
 import { CHAT_ONLY_RESOURCE_LOADER_OPTIONS, contextFilesSystemPrompt } from "./chat-only";
@@ -178,7 +181,7 @@ type AgentSessionWrapperOptions = {
   onAgentRunComplete?: AgentRunCompleteListener;
   suppressCompletionNotifications?: boolean;
   /** A subagent's wrapper: a run ended and nothing is left to do. */
-  onDirectTurnSettled?: (aborted: boolean) => void;
+  onDirectTurnSettled?: (aborted: boolean, from: number) => void;
   /** Connects the session's MCP servers before a prompt starts a run, and lets go of them when it closes (lib/mcp-host.ts). */
   mcpHost?: WrapperMcpHost;
   /** Chat only: the extension-provided model the session wanted, named when a prompt finds no model. */
@@ -403,7 +406,8 @@ export class AgentSessionWrapper {
   private readonly exactSystemPrompt?: () => string;
   private readonly chatOnly: boolean;
   private readonly onAgentRunComplete?: AgentRunCompleteListener;
-  private readonly onDirectTurnSettled?: (aborted: boolean) => void;
+  private readonly onDirectTurnSettled?: (aborted: boolean, from: number) => void;
+  private directTurnFrom = 0;
   private readonly suppressCompletionNotifications: boolean;
   private readonly mcpHost?: WrapperMcpHost;
   private readonly chatOnlyExtensionModel?: { provider: string; id: string };
@@ -542,6 +546,10 @@ export class AgentSessionWrapper {
     return this._alive && (this.pendingPromptCount > 0 || this.inner.isStreaming || this.inner.isCompacting || this.shellRunning);
   }
 
+  isDirectPromptArriving(): boolean {
+    return this.arrivingPromptCount > 0;
+  }
+
   /**
    * True while an extension's blocking dialog is unanswered: select, confirm,
    * input, editor, or a custom overlay still open. The run is parked on a promise
@@ -662,6 +670,10 @@ export class AgentSessionWrapper {
       this.lastEventType = typeof event.type === "string" ? event.type : null;
       this.lastEventAt = Date.now();
       if (event.type === "agent_start") {
+        if (this.onDirectTurnSettled && !this.agentRunNeedsCompletion) {
+          this.directTurnFrom = this.inner.sessionManager.getEntries().length;
+          beginProjectCommandRun(this.inner.sessionManager);
+        }
         this.agentRunNeedsCompletion = true;
         this.lastRunAborted = false;
       }
@@ -786,7 +798,7 @@ export class AgentSessionWrapper {
     if (!this.agentRunNeedsCompletion || this.isRunning()) return;
     this.agentRunNeedsCompletion = false;
     try {
-      this.onDirectTurnSettled?.(this.lastRunAborted);
+      this.onDirectTurnSettled?.(this.lastRunAborted, this.directTurnFrom);
     } catch (error) {
       console.error("[pi-web] could not settle the subagent turn:", error instanceof Error ? error.message : error);
     }
@@ -1377,6 +1389,14 @@ export class AgentSessionWrapper {
 
   async send(command: Record<string, unknown>): Promise<unknown> {
     const type = command.type as string;
+    const checkManagedMessageAdmission = () => {
+      if (type !== "prompt" && type !== "steer" && type !== "follow_up") return;
+      if (!blocksDirectSubagentMessage(this.sessionId)) return;
+      // Steering an actually streaming child remains supported; an idle SDK queue is not delivery.
+      if (this.inner.isStreaming && (type !== "prompt" || command.streamingBehavior === "steer" || command.streamingBehavior === "followUp")) return;
+      throw Object.assign(new Error("Message not accepted: this child has a managed run. Try again when it settles."), { code: MANAGED_RUN_CONFLICT_CODE });
+    };
+    checkManagedMessageAdmission();
     // A status read (the chat's reconciliation, every few seconds while it runs) would hide the
     // last command that did something; it never resets the idle timer either.
     if (type !== "get_state") {
@@ -1412,6 +1432,7 @@ export class AgentSessionWrapper {
         throw new Error("Session is being copied to a new session");
       }
 
+      checkManagedMessageAdmission();
       if (type === "prompt" || type === "steer" || type === "follow_up") {
         const imageError = validateAgentImages(command.images);
         if (imageError) throw new Error(imageError);
@@ -1433,6 +1454,7 @@ export class AgentSessionWrapper {
         // this submission starts a run or joins its streaming queue.
         const releaseAdmission = await this.acquirePromptAdmission();
         try {
+          checkManagedMessageAdmission();
           // A steer or follow-up joins the run beside a `!` command, as pi's TUI
           // queues it; only a prompt that would start a run waits for the command.
           if (this.shellRunning && !(command.streamingBehavior && this.inner.isStreaming)) {
@@ -2036,6 +2058,10 @@ export class AgentSessionWrapper {
               // environment and agent bin directory into that sandbox.
               operations: hooked?.operations ?? createProjectCommandBashOperations({
                 shellPath: this.inner.settingsManager.getShellPath(),
+                onCleanupUnconfirmed: () => {
+                  this.inner.sessionManager.appendCustomEntry(PROJECT_COMMAND_CLEANUP_UNCONFIRMED, { source: "user_bash" });
+                  this.persistBashOnlySession();
+                },
               }),
             });
           }
@@ -3001,7 +3027,7 @@ const SUBAGENT_CONTROLLER = createSubagentController({
         : {}),
       chatOnly: options?.chatOnly,
       suppressCompletionNotifications: true,
-      onDirectTurnSettled: (aborted) => SUBAGENT_CONTROLLER.settleDirectTurn(inner.sessionId, aborted),
+      onDirectTurnSettled: (aborted, from) => SUBAGENT_CONTROLLER.settleDirectTurn(inner.sessionId, aborted, from),
       ...(options?.mcpHost ? { mcpHost: options.mcpHost } : {}),
     });
     registerRpcWrapper(wrapper);
@@ -3264,7 +3290,7 @@ function runtimeMessageActivityMs(entry: SessionMessageEntry): number | undefine
  */
 export function subagentDisplayStatus(sessionId: string, persisted: SubagentSessionStatus): SubagentSessionStatus {
   if (getRegistry().get(sessionId)?.isRunning()) return "running";
-  return getLiveSubagentStatus(sessionId) ?? settleOrphanedSubagentStatus(persisted);
+  return getLiveSubagentStatus(sessionId) ?? getUnsavedSubagentResult(sessionId)?.status ?? settleOrphanedSubagentStatus(persisted);
 }
 
 export function withSubagentDisplayStatus(sessions: SessionInfo[]): SessionInfo[] {
@@ -3272,7 +3298,9 @@ export function withSubagentDisplayStatus(sessions: SessionInfo[]): SessionInfo[
     const relation = session.relation;
     if (relation?.kind !== "subagent") return session;
     const status = subagentDisplayStatus(session.id, relation.status);
-    return status === relation.status ? session : { ...session, relation: { ...relation, status } };
+    const processCleanupUnconfirmed = relation.processCleanupUnconfirmed ?? getUnsavedSubagentResult(session.id)?.processCleanupUnconfirmed;
+    return status === relation.status && processCleanupUnconfirmed === relation.processCleanupUnconfirmed
+      ? session : { ...session, relation: { ...relation, status, processCleanupUnconfirmed } };
   });
 }
 
@@ -3330,6 +3358,7 @@ export function getRpcSessionInfos(options: { includeTransient?: boolean } = {})
           profile: subagent.profile,
           description: subagent.description,
           status: session.isRunning() ? "running" as const : subagent.status,
+          ...(subagent.processCleanupUnconfirmed ? { processCleanupUnconfirmed: true as const } : {}),
         },
       } : side ? {
         parentSessionId: side.parentSessionId,
@@ -3583,6 +3612,14 @@ export async function startRpcSession(
   const isSideChat = hasSideMetadata(sessionEntries);
   if (isSideChat && !readSideRelation(sessionEntries)) throw new Error("Invalid side chat metadata");
   const sideChatTools = isSideChat && !chatOnly;
+  // Replay the frozen fork context, including the SDK's effective compaction checkpoint.
+  // Do not use the side chat's later turns (or arbitrary old raw system entries).
+  const boundary = isSideChat ? sessionManager.getEntries().find((entry) =>
+    entry.type === "custom_message" && entry.customType === SIDE_BOUNDARY_MESSAGE_TYPE) : undefined;
+  const inheritsAutomationPolicy = Boolean(boundary && getCurrentSystemPrompt(
+    buildSdkSessionContext(sessionManager.getEntries(), boundary.id).messages.flatMap((message) =>
+      message.role === "system" ? [message] : []),
+  ).includes(MANAGED_AUTOMATION_POLICY));
   const selectedToolNames = sideChatTools
     ? sideToolNames(pinnedToolNames, sessionManager.getBranch().flatMap((entry) => (
         entry.type === "message" && entry.message.role === "system" ? [entry.message] : []
@@ -3661,8 +3698,13 @@ export async function startRpcSession(
       exactSystemPrompt: subagentResources.exactSystemPrompt
         ?? (chatOnly ? subagentResources.appendSystemPrompt[0] ?? "" : undefined),
     }) : undefined;
+    const childExtensionLoaderOptions = subagentResources && subagentExtensionLoaderOptions(subagentResources);
     const subagentExtensionFactories = [
       llamaCppExtension,
+      ...(!chatOnly && subagentResources ? [
+        createProjectCommandBashExtension({ cwd: sessionCwd, settings: settingsManager }),
+        createProjectCommandPowerShellExtension({ cwd: sessionCwd }),
+      ] : []),
       ...(subagentCodemode ? [subagentCodemode] : []),
       ...(subagentMcp && subagentResources
         ? [...subagentMcp.extensions, createSubagentMcpPolicyExtension(() => subagentResources)]
@@ -3675,8 +3717,11 @@ export async function startRpcSession(
       settingsManager,
       resourceLoaderOptions: subagentResources
         ? {
-            ...subagentExtensionLoaderOptions(subagentResources),
+            ...childExtensionLoaderOptions,
             ...skillsBinding!.loaderOptions,
+            extensionsOverride: (base) => preferUserPowerShellExtension(preferUserBashExtension(
+              childExtensionLoaderOptions?.extensionsOverride?.(base) ?? base,
+            )),
             extensionFactories: subagentExtensionFactories,
             noPromptTemplates: true,
             noThemes: true,
@@ -3692,6 +3737,7 @@ export async function startRpcSession(
         : chatOnly
           ? { ...CHAT_ONLY_RESOURCE_LOADER_OPTIONS, extensionFactories: [exactSystemPromptExtension] }
         : {
+            ...(!isSideChat || inheritsAutomationPolicy ? { appendSystemPrompt: [MANAGED_AUTOMATION_POLICY] } : {}),
             extensionFactories: [
               llamaCppExtension,
               ...(builtins?.extensions ?? []),
@@ -3875,7 +3921,7 @@ export async function startRpcSession(
       },
       suppressCompletionNotifications: Boolean(subagentResources) || isSideChat,
       ...(subagentResources
-        ? { onDirectTurnSettled: (aborted: boolean) => SUBAGENT_CONTROLLER.settleDirectTurn(inner.sessionId, aborted) }
+        ? { onDirectTurnSettled: (aborted: boolean, from: number) => SUBAGENT_CONTROLLER.settleDirectTurn(inner.sessionId, aborted, from) }
         : {}),
       ...(mcpHost ? { mcpHost } : {}),
       ...(chatOnlyExtensionModel ? { chatOnlyExtensionModel } : {}),

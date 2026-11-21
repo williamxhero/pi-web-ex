@@ -11,6 +11,7 @@ import { getProjectTrustStatus } from "./project-trust";
 import { disabledBuiltInSubagents } from "./subagent-settings";
 import { PRESET_READ_ONLY } from "./tool-presets";
 import type { SessionEntry, SubagentSessionStatus } from "./types";
+import { PROJECT_COMMAND_CLEANUP_UNCONFIRMED } from "./project-command-evidence";
 
 export const SUBAGENT_META_TYPE = "pi-web:subagent";
 export const SUBAGENT_STATUS_TYPE = "pi-web:subagent-status";
@@ -106,6 +107,7 @@ export interface SubagentResultMetadata {
   result?: string;
   error?: string;
   worktreeCleanupError?: string;
+  processCleanupUnconfirmed?: true;
   /** Whether an isolated run's worktree path still existed when this entry was written (#1202). */
   worktreeExists?: boolean;
 }
@@ -132,6 +134,7 @@ export interface SubagentRunInfo {
   worktreePath?: string;
   worktreeBranch?: string;
   worktreeCleanupError?: string;
+  processCleanupUnconfirmed?: true;
   /** Set once the run's result is recorded, as `SubagentResultMetadata.worktreeExists`. */
   worktreeExists?: boolean;
   /** Set on a run started by `resume`, which reuses the session ID of an earlier run. Not persisted. */
@@ -993,6 +996,12 @@ export function readSubagentRun(entries: readonly SessionEntry[], sessionId: str
     : statusData?.version === 1 && (statusData.status === "queued" || statusData.status === "running")
       ? statusData.status
       : "interrupted";
+  // Process cleanup has no automatic confirmation on retry or resume. The original warning remains applicable.
+  const cleanupUnconfirmed = entries.some((entry) => entry.type === "custom" && (
+    entry.customType === PROJECT_COMMAND_CLEANUP_UNCONFIRMED ||
+    ((entry.customType === SUBAGENT_RESULT_TYPE || entry.customType === SUBAGENT_STATUS_TYPE) &&
+      isRecord(entry.data) && entry.data.processCleanupUnconfirmed === true)
+  ));
   return {
     sessionId,
     sessionPath,
@@ -1010,6 +1019,7 @@ export function readSubagentRun(entries: readonly SessionEntry[], sessionId: str
     ...(typeof data.worktreePath === "string" ? { worktreePath: data.worktreePath } : {}),
     ...(typeof data.worktreeBranch === "string" ? { worktreeBranch: data.worktreeBranch } : {}),
     ...(result && typeof result.worktreeCleanupError === "string" ? { worktreeCleanupError: result.worktreeCleanupError } : {}),
+    ...(cleanupUnconfirmed ? { processCleanupUnconfirmed: true } : {}),
     ...(result && typeof result.worktreeExists === "boolean" ? { worktreeExists: result.worktreeExists } : {}),
   };
 }
