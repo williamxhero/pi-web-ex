@@ -285,6 +285,50 @@ function getSlashDescription(command: SlashCommandPaletteItem, t: (key: string) 
   return command.source === "builtin" ? t(command.description) : command.description ?? "";
 }
 
+export interface SlashQueryMatch {
+  /** Index of the token's "/". */
+  start: number;
+  /** Index just past the token's word, for replacing the whole of it. */
+  end: number;
+  /** Lower-cased text typed after the "/", up to the caret; may be empty. */
+  query: string;
+}
+
+/**
+ * The command token at the caret: a "/" that starts a word (the text's start,
+ * after whitespace, or right after a non-ASCII character, since Chinese runs on
+ * without spaces between words), then text with no whitespace up to the caret.
+ * pi runs a command only when it starts the message, but the palette is offered
+ * wherever the caret types one. Starting a word is also what keeps a path's, a
+ * URL's or a fraction's "/" (`src/components`, `https://…`, `24/7`) from
+ * opening it: those follow an ASCII character.
+ */
+export function extractSlashQuery(text: string, caret: number): SlashQueryMatch | null {
+  const before = text.slice(0, Math.max(0, Math.min(caret, text.length)));
+  const match = /(?:^|\s|[^\x00-\x7f])\/([^\s]*)$/.exec(before);
+  if (!match) return null;
+  let end = before.length;
+  while (end < text.length && !/\s/.test(text[end])) end += 1;
+  return { start: before.length - match[1].length - 1, end, query: match[1].toLowerCase() };
+}
+
+/**
+ * The edit that writes a chosen command in place of its token, followed by a
+ * space as at the input's start. One space already after the word is swallowed
+ * with it, so completing between words never leaves two.
+ */
+export function slashCompletionEdit(
+  text: string,
+  token: SlashQueryMatch,
+  name: string,
+): { start: number; end: number; insert: string } {
+  return {
+    start: token.start,
+    end: token.end + (text[token.end] === " " ? 1 : 0),
+    insert: `/${name} `,
+  };
+}
+
 /**
  * The palette's matches for a lower-cased query. pi's TUI matches names only;
  * the palette searches descriptions too, but only when no name matches, so
@@ -569,6 +613,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const bashMode = attachedImages.length === 0 && trimmedValue.startsWith("!");
   const bashExcluded = bashMode && trimmedValue.startsWith("!!");
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
+  // The command token at the caret, not just the input's start.
+  const [slashToken, setSlashToken] = useState<SlashQueryMatch | null>(null);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [slashMenuMaxHeight, setSlashMenuMaxHeight] = useState<number | null>(null);
   const [atQuery, setAtQuery] = useState<AtQueryMatch | null>(null);
@@ -611,6 +657,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const valueRef = useRef(value);
   const attachedImagesRef = useRef(attachedImages);
   const pendingImageCountRef = useRef(0);
+  // Text that lands whole closes both palettes: they follow what the user types.
+  const resetAutocompleteMenus = useCallback(() => {
+    setAtQuery(null);
+    setSlashToken(null);
+  }, []);
   valueRef.current = value;
   attachedImagesRef.current = attachedImages;
 
@@ -621,7 +672,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       if (current.trim()) return;
       valueRef.current = text;
       setValue(text);
-      setAtQuery(null);
+      resetAutocompleteMenus();
       requestAnimationFrame(() => {
         if (!ta) return;
         ta.focus();
@@ -639,7 +690,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       valueRef.current = restoredText;
       attachedImagesRef.current = restoredImages;
       setValue(restoredText);
-      setAtQuery(null);
+      resetAutocompleteMenus();
       setHistoryMenuOpen(false);
       setAttachedImages((prev) => {
         prev.forEach(revokeImagePreview);
@@ -661,7 +712,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       const combined = [text, current].filter((t) => t.trim()).join("\n\n");
       valueRef.current = combined;
       setValue(combined);
-      setAtQuery(null);
+      resetAutocompleteMenus();
       requestAnimationFrame(() => {
         if (!ta) return;
         ta.focus();
@@ -699,7 +750,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         current.forEach(revokeImagePreview);
         return movedImages;
       });
-      setAtQuery(null);
+      resetAutocompleteMenus();
       setHistoryMenuOpen(false);
     },
     restoreSubmission(text: string, images?: ChatDraftImage[], targetDraftKey?: string) {
@@ -745,7 +796,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         valueRef.current = restored;
         return restored;
       });
-      setAtQuery(null);
+      resetAutocompleteMenus();
       setHistoryMenuOpen(false);
       if (images?.length) {
         setAttachedImages((current) => {
@@ -787,7 +838,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       const newVal = before + sep + text + after;
       valueRef.current = newVal;
       setValue(newVal);
-      setAtQuery(null);
+      resetAutocompleteMenus();
       requestAnimationFrame(() => {
         if (!ta) return;
         const pos = start + sep.length + text.length;
@@ -811,7 +862,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       const newVal = before + sep + text + after;
       valueRef.current = newVal;
       setValue(newVal);
-      setAtQuery(null);
+      resetAutocompleteMenus();
       requestAnimationFrame(() => {
         if (!ta) return;
         const pos = start + sep.length + text.length;
@@ -877,7 +928,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const clearInput = useCallback(() => {
     valueRef.current = "";
     setValue("");
-    setAtQuery(null);
+    resetAutocompleteMenus();
     setHistoryMenuOpen(false);
     if (draftKey) clearDraft(draftKey);
     if (draftKeyRef.current && draftKeyRef.current !== draftKey) clearDraft(draftKeyRef.current);
@@ -885,7 +936,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  }, [clearImages, draftKey]);
+  }, [clearImages, draftKey, resetAutocompleteMenus]);
 
   useEffect(() => {
     if (!draftKey || draftKeyRef.current !== draftKey) return;
@@ -913,13 +964,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     valueRef.current = nextValue;
     attachedImagesRef.current = nextImages;
     setValue(nextValue);
-    setAtQuery(null);
+    resetAutocompleteMenus();
     setHistoryMenuOpen(false);
     setAttachedImages((prev) => {
       prev.forEach(revokeImagePreview);
       return nextImages;
     });
-  }, [draftKey]);
+  }, [draftKey, resetAutocompleteMenus]);
 
   const resizeTextarea = useCallback(() => {
     const ta = textareaRef.current;
@@ -977,17 +1028,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     onSend(msg, attachedImages.length ? attachedImages : undefined);
   }, [value, attachedImages, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock]);
 
-  const slashQuery = !compact && value.startsWith("/") && !/\s/.test(value.slice(1))
-    ? value.slice(1).toLowerCase()
-    : null;
+  const slashQuery = slashToken?.query ?? null;
 
   const filteredSlashCommands = (() => {
-    if (slashQuery === null) return [];
+    if (slashToken === null) return [];
     const builtinCommands = isStreaming
       ? BUILTIN_SLASH_COMMANDS.filter((command) => command.availableWhileStreaming)
       : BUILTIN_SLASH_COMMANDS;
     const commands = [...builtinCommands, ...(slashCommands ?? [])];
-    return filterSlashCommands(commands, slashQuery, t);
+    return filterSlashCommands(commands, slashToken.query, t);
   })();
 
   const {
@@ -1022,6 +1071,23 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     const pos = cursor ?? text.length;
     setAtQuery(extractAtQuery(text.slice(0, pos)));
   }, [cwd]);
+
+  // ── / command palette ────────────────────────────────────────────────────
+  // Like the @ menu it follows the caret, so a "/" typed after existing text
+  // opens the same chooser as one typed into an empty input.
+  const updateSlashQuery = useCallback((text: string, cursor: number | null) => {
+    // Quote mode has no palette, and a "!" command is not prompt text.
+    if (compact || (text.trimStart().startsWith("!") && attachedImagesRef.current.length === 0)) {
+      setSlashToken(null);
+      return;
+    }
+    setSlashToken(extractSlashQuery(text, cursor ?? text.length));
+  }, [compact]);
+
+  const updateMenus = useCallback((text: string, cursor: number | null) => {
+    updateAtQuery(text, cursor);
+    updateSlashQuery(text, cursor);
+  }, [updateAtQuery, updateSlashQuery]);
 
   const atQueryText = atQuery?.query ?? null;
   const atLocalMatches: FileIndexEntry[] = React.useMemo(() => (
@@ -1167,7 +1233,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     setValue(text);
     setHistoryMenuOpen(false);
     setHistoryActiveIndex(0);
-    setAtQuery(null);
+    resetAutocompleteMenus();
     requestAnimationFrame(() => {
       const ta = textareaRef.current;
       if (!ta) return;
@@ -1176,22 +1242,32 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       ta.style.height = "auto";
       ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
     });
-  }, []);
+  }, [resetAutocompleteMenus]);
 
+  // Writes the chosen command in place of the token the palette is following:
+  // at the input's start that is the whole draft, and mid-text only the word
+  // typed there, which stays prompt text (pi runs a command only from the
+  // message's start).
   const applySlashCommand = useCallback((command: SlashCommandPaletteItem) => {
-    const nextValue = `/${command.name} `;
-    setValue(nextValue);
+    const token = slashToken;
     setSlashMenuOpen(false);
     setSlashActiveIndex(0);
+    setSlashToken(null);
+    if (!token) return;
+    const edit = slashCompletionEdit(value, token, command.name);
+    const nextValue = value.slice(0, edit.start) + edit.insert + value.slice(edit.end);
+    valueRef.current = nextValue;
+    setValue(nextValue);
+    const pos = edit.start + edit.insert.length;
     requestAnimationFrame(() => {
       const ta = textareaRef.current;
       if (!ta) return;
       ta.focus();
-      ta.setSelectionRange(nextValue.length, nextValue.length);
+      ta.setSelectionRange(pos, pos);
       ta.style.height = "auto";
       ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
     });
-  }, []);
+  }, [slashToken, value]);
 
   const sendQueued = useCallback((mode: "steer" | "followup") => {
     const msg = value.trim();
@@ -1437,15 +1513,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     valueRef.current = nextValue;
     setValue(nextValue);
     setHistoryMenuOpen(false);
-    updateAtQuery(nextValue, start + markdown.length);
+    updateMenus(nextValue, start + markdown.length);
     requestAnimationFrame(() => {
       ta.focus();
       ta.setSelectionRange(start + markdown.length, start + markdown.length);
     });
-  }, [compact, processImageFiles, updateAtQuery]);
+  }, [compact, processImageFiles, updateMenus]);
 
+  // Open/reset the palette whenever the token at the caret appears or changes,
+  // as the @ menu does: Escape closes it, the next keystroke re-opens it.
+  const slashTokenKey = slashToken === null ? null : `${slashToken.start}:${slashToken.query}`;
   useEffect(() => {
-    if (slashQuery === null) {
+    if (slashTokenKey === null) {
       setSlashMenuOpen(false);
       setSlashActiveIndex(0);
       slashCommandsRequestedRef.current = false;
@@ -1459,7 +1538,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         slashCommandsRequestedRef.current = false;
       });
     }
-  }, [slashQuery, onLoadSlashCommands]);
+  }, [slashTokenKey, onLoadSlashCommands]);
 
   // Lazy-load skill dormancy (disable-model-invocation) each time the slash
   // palette opens, so toggles made in the skills panel are reflected on the
@@ -1504,7 +1583,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [slashActiveIndex, slashMenuOpen]);
 
   useLayoutEffect(() => {
-    if (!slashMenuOpen || slashQuery === null) {
+    if (!slashMenuOpen || slashToken === null) {
       setSlashMenuMaxHeight(null);
       return;
     }
@@ -1513,7 +1592,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     return subscribeUpwardMenuMaxHeight(menu, (nextHeight) => {
       setSlashMenuMaxHeight((current) => current === nextHeight ? current : nextHeight);
     });
-  }, [slashMenuOpen, slashQuery]);
+  }, [slashMenuOpen, slashToken]);
 
   useLayoutEffect(() => {
     if (!atMenuOpen || atQuery === null) {
@@ -2159,11 +2238,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               valueRef.current = e.target.value;
               setValue(e.target.value);
               setHistoryMenuOpen(false);
-              updateAtQuery(e.target.value, e.target.selectionStart);
+              updateMenus(e.target.value, e.target.selectionStart);
             }}
             onSelect={(e) => {
               const el = e.currentTarget;
-              updateAtQuery(el.value, el.selectionStart);
+              updateMenus(el.value, el.selectionStart);
             }}
             onKeyDown={handleKeyDown}
             onCompositionStart={() => {
@@ -2173,7 +2252,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               isComposingRef.current = false;
               lastCompositionEndAtRef.current = Date.now();
               const el = e.currentTarget;
-              updateAtQuery(el.value, el.selectionStart);
+              updateMenus(el.value, el.selectionStart);
             }}
             onInput={handleInput}
             onPaste={handlePaste}

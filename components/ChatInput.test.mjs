@@ -11,7 +11,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, RUN_END_CLICK_GUARD_MS, autoGrowTextarea, scrollTextareaCaretIntoView, canClearBuiltinCommandInput, canRestoreUserMessage, canRunBuiltinSlashCommandWhileStreaming, cycleListIndex, filterModelOptions, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages, isExactSlashCommand, isRunEndStrayClick, modelSupportsImageInput, offersBuiltinSlashCommandWhileStreaming, replaceLinksWithMarkdown, readImageFile, replaceTextareaRange, stacksComposerLayout, submitsSlashCommandOnEnter } = await jiti.import("./ChatInput.tsx");
+const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, RUN_END_CLICK_GUARD_MS, autoGrowTextarea, scrollTextareaCaretIntoView, canClearBuiltinCommandInput, canRestoreUserMessage, canRunBuiltinSlashCommandWhileStreaming, cycleListIndex, extractSlashQuery, filterModelOptions, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages, isExactSlashCommand, isRunEndStrayClick, modelSupportsImageInput, offersBuiltinSlashCommandWhileStreaming, replaceLinksWithMarkdown, readImageFile, replaceTextareaRange, slashCompletionEdit, stacksComposerLayout, submitsSlashCommandOnEnter } = await jiti.import("./ChatInput.tsx");
 const { isBareMcpCommand } = await jiti.import("@/lib/mcp-command");
 const { ModelSelector } = await jiti.import("./ModelSelector.tsx");
 // As ChatInput.tsx imports it: on Windows jiti loads "@/lib/draft-store.ts"
@@ -254,7 +254,7 @@ test("a plain-text paste the browser dropped is inserted from the event's own te
           };
         }
       },
-      valueRef: { current: "" }, setValue() {}, setHistoryMenuOpen() {}, updateAtQuery() {}, requestAnimationFrame() {},
+      valueRef: { current: "" }, setValue() {}, setHistoryMenuOpen() {}, updateMenus() {}, requestAnimationFrame() {},
     });
     const nativeEvent = { defaultPrevented: false };
     handler({
@@ -692,6 +692,48 @@ test("recognizes exact slash commands for one-Enter submission", () => {
   assert.equal(isExactSlashCommand("/co", builtin), false);
   assert.equal(isExactSlashCommand("/copy extra", builtin), false);
   assert.equal(isExactSlashCommand("/copy", { ...builtin, source: "extension" }), false);
+});
+
+test("finds the command token at the caret, at the input's start or mid-text", () => {
+  // The input's start, as the composer has always offered it.
+  assert.deepEqual(extractSlashQuery("/", 1), { start: 0, end: 1, query: "" });
+  assert.deepEqual(extractSlashQuery("/com", 4), { start: 0, end: 4, query: "com" });
+  // Mid-text, a slash that starts a word opens the same chooser, filtered from it.
+  assert.deepEqual(extractSlashQuery("please run /Com", 15), { start: 11, end: 15, query: "com" });
+  assert.deepEqual(extractSlashQuery("note\n/com", 9), { start: 5, end: 9, query: "com" });
+  assert.deepEqual(extractSlashQuery("a\t/com", 6), { start: 2, end: 6, query: "com" });
+  // Chinese needs no space before the next word, so a non-ASCII character is a
+  // word boundary too: "/com" right after a sentence still opens the palette.
+  assert.deepEqual(extractSlashQuery("看这个/com", 7), { start: 3, end: 7, query: "com" });
+  // The replacement covers the token's whole word, wherever the caret sits in it.
+  assert.deepEqual(extractSlashQuery("run /compact now", 8), { start: 4, end: 12, query: "com" });
+  // A path's, URL's, fraction's or mid-word slash is not a command: it follows
+  // an ASCII character, so it starts no word.
+  assert.equal(extractSlashQuery("src/components", 14), null);
+  assert.equal(extractSlashQuery("https://example.com", 19), null);
+  assert.equal(extractSlashQuery("24/7", 4), null);
+  assert.equal(extractSlashQuery("and/or", 6), null);
+  // Whitespace ends the token, and a caret outside it does not keep the palette.
+  assert.equal(extractSlashQuery("/compact ", 9), null);
+  assert.equal(extractSlashQuery("run /compact now", 16), null);
+  assert.equal(extractSlashQuery("/com", 0), null);
+});
+
+test("completing a command mid-text replaces just its token", () => {
+  const atEnd = extractSlashQuery("run /com", 8);
+  assert.deepEqual(slashCompletionEdit("run /com", atEnd, "compact"), {
+    start: 4, end: 8, insert: "/compact ",
+  });
+  // One space already after the word is swallowed, so completing between words
+  // never leaves two. The edit keeps the rest of the draft.
+  const between = extractSlashQuery("run /com now", 8);
+  assert.deepEqual(slashCompletionEdit("run /com now", between, "compact"), {
+    start: 4, end: 9, insert: "/compact ",
+  });
+  assert.equal(
+    "run /com now".slice(0, 4) + "/compact " + "run /com now".slice(9),
+    "run /compact now",
+  );
 });
 
 test("clears a completed built-in only while its submitted input is unchanged", () => {
