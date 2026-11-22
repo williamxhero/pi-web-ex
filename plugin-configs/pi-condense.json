@@ -1,0 +1,343 @@
+{
+  "storage": { "type": "settings", "namespace": "contextPrune", "locations": ["global"] },
+  "fields": [
+    {
+      "key": "enabled",
+      "type": "boolean",
+      "default": false,
+      "label": { "en": "Prune tool output", "zh-CN": "压缩工具输出" },
+      "description": {
+        "en": "Summarize finished tool calls and replace their raw output in later context.",
+        "zh-CN": "总结已完成的工具调用，在后续上下文中用摘要替换原始输出。"
+      }
+    },
+    {
+      "key": "showPruneStatusLine",
+      "type": "boolean",
+      "default": true,
+      "label": { "en": "Status line", "zh-CN": "状态行" },
+      "description": {
+        "en": "Show the prune footer status line and queued turn messages.",
+        "zh-CN": "显示底部的压缩状态行和排队的轮次消息。"
+      }
+    },
+    {
+      "key": "pruneOn",
+      "type": "enum",
+      "default": "agent-message",
+      "options": [
+        { "value": "agent-message", "label": { "en": "On agent message", "zh-CN": "每条助手消息后" } },
+        { "value": "on-demand", "label": { "en": "On demand", "zh-CN": "按需" } }
+      ],
+      "label": { "en": "Prune when", "zh-CN": "触发时机" },
+      "description": {
+        "en": "When summarization and pruning run.",
+        "zh-CN": "何时执行总结与压缩。"
+      }
+    },
+    {
+      "key": "batchingMode",
+      "type": "enum",
+      "default": "turn",
+      "options": [
+        { "value": "turn", "label": { "en": "Per assistant turn", "zh-CN": "按助手回合" } },
+        { "value": "agent-message", "label": { "en": "Per user message", "zh-CN": "按用户消息" } }
+      ],
+      "label": { "en": "Batch by", "zh-CN": "分批粒度" },
+      "description": {
+        "en": "One summary per assistant turn, or one per span between user messages.",
+        "zh-CN": "每个助手回合一份摘要，或在两次用户消息之间合并成一份。"
+      }
+    },
+    {
+      "key": "summarizerModel",
+      "type": "string",
+      "default": "default",
+      "maxLength": 200,
+      "label": { "en": "Summarizer model", "zh-CN": "摘要模型" },
+      "description": {
+        "en": "\"default\" uses the active model; \"provider/model-id\" names another.",
+        "zh-CN": "填 default 用当前模型；也可以写 provider/model-id 指定别的模型。"
+      }
+    },
+    {
+      "key": "summarizerThinking",
+      "type": "enum",
+      "default": "default",
+      "options": [
+        { "value": "default", "label": { "en": "Default", "zh-CN": "默认" } },
+        { "value": "off", "label": { "en": "Off", "zh-CN": "关闭" } },
+        { "value": "minimal", "label": { "en": "Minimal", "zh-CN": "极少" } },
+        { "value": "low", "label": { "en": "Low", "zh-CN": "低" } },
+        { "value": "medium", "label": { "en": "Medium", "zh-CN": "中" } },
+        { "value": "high", "label": { "en": "High", "zh-CN": "高" } },
+        { "value": "xhigh", "label": { "en": "Extra high", "zh-CN": "极高" } }
+      ],
+      "label": { "en": "Summarizer reasoning", "zh-CN": "摘要推理强度" },
+      "description": {
+        "en": "Thinking level requested for summarizer calls.",
+        "zh-CN": "摘要调用使用的推理强度。"
+      }
+    },
+    {
+      "key": "quietOversizedSkips",
+      "type": "boolean",
+      "default": false,
+      "label": { "en": "Quiet skipped batches", "zh-CN": "静默跳过通知" },
+      "description": {
+        "en": "Suppress the notice when a batch is skipped as oversized or trivial.",
+        "zh-CN": "批次因过大或过小被跳过时不发提示。"
+      }
+    },
+    {
+      "key": "minBatchChars",
+      "type": "integer",
+      "default": 2000,
+      "min": 0,
+      "max": 200000,
+      "unit": "chars",
+      "label": { "en": "Minimum batch size", "zh-CN": "最小区块字数" },
+      "description": {
+        "en": "Skip summarization below this many characters of raw output. 0 disables the guard.",
+        "zh-CN": "原始输出少于这个字数就不总结。0 表示不设门槛。"
+      }
+    },
+    {
+      "key": "recoveryGraceTurns",
+      "type": "integer",
+      "default": 3,
+      "min": 0,
+      "max": 50,
+      "control": "slider",
+      "label": { "en": "Recovery grace", "zh-CN": "恢复宽限轮数" },
+      "description": {
+        "en": "User turns a recovered output stays verbatim before it reverts to a stub. 0 reverts at once.",
+        "zh-CN": "取回的内容原样保留几个用户轮次，之后重新变回占位符。0 表示立即变回。"
+      }
+    },
+    {
+      "key": "summarizerIdleTimeoutMs",
+      "type": "integer",
+      "default": 45000,
+      "min": 0,
+      "max": 3600000,
+      "unit": "ms",
+      "label": { "en": "Summarizer idle timeout", "zh-CN": "摘要空闲超时" },
+      "description": {
+        "en": "Abort a summarizer stream that goes quiet for this long. 0 disables the timer.",
+        "zh-CN": "摘要流静默超过这个时间就中止。0 表示不计时。"
+      }
+    },
+    {
+      "key": "summarizerMaxTimeoutMs",
+      "type": "integer",
+      "default": 180000,
+      "min": 0,
+      "max": 7200000,
+      "unit": "ms",
+      "label": { "en": "Summarizer total timeout", "zh-CN": "摘要总超时" },
+      "description": {
+        "en": "Hard ceiling for one summarizer call. 0 disables the ceiling.",
+        "zh-CN": "单次摘要调用的总时长上限。0 表示不限。"
+      }
+    },
+    {
+      "key": "protectedTools",
+      "type": "strings",
+      "default": [],
+      "label": { "en": "Protected tools", "zh-CN": "受保护的工具" },
+      "description": {
+        "en": "Tool names whose output is never pruned.",
+        "zh-CN": "这些工具的输出永远不会被压缩。"
+      }
+    },
+    {
+      "key": "protectedPaths",
+      "type": "strings",
+      "default": ["**/skills/**/*.md", "**/gauntlet-overrides.md"],
+      "label": { "en": "Protected paths", "zh-CN": "受保护的路径" },
+      "description": {
+        "en": "Glob patterns whose files are never pruned.",
+        "zh-CN": "匹配这些 glob 的文件内容永远不会被压缩。"
+      }
+    },
+    {
+      "key": "dedupByContentHash",
+      "type": "boolean",
+      "default": true,
+      "label": { "en": "Deduplicate output", "zh-CN": "按内容去重" },
+      "description": {
+        "en": "Treat identical tool output as one batch entry.",
+        "zh-CN": "把内容完全相同的工具输出当作同一条。"
+      }
+    },
+    {
+      "key": "chainCompression.enabled",
+      "type": "boolean",
+      "default": true,
+      "label": { "en": "Compress closed chains", "zh-CN": "压缩已结束的调用链" },
+      "description": {
+        "en": "Collapse finished tool-call chains into their final summary.",
+        "zh-CN": "把已经结束的工具调用链合并成最终摘要。"
+      }
+    },
+    {
+      "key": "chainCompression.rollingWindow",
+      "type": "integer",
+      "default": 3,
+      "min": 1,
+      "max": 10,
+      "control": "slider",
+      "label": { "en": "Chain window", "zh-CN": "链窗口" },
+      "description": {
+        "en": "Recent chains kept available for chain compression.",
+        "zh-CN": "保留多少个最近的调用链可供压缩。"
+      }
+    },
+    {
+      "key": "chainCompression.idleCleanupMinutes",
+      "type": "integer",
+      "default": 180,
+      "min": 0,
+      "max": 10080,
+      "unit": "min",
+      "label": { "en": "Chain idle cleanup", "zh-CN": "调用链闲置清理" },
+      "description": {
+        "en": "Minutes a chain may stay open before it is cleaned up. 0 disables cleanup.",
+        "zh-CN": "调用链闲置多少分钟后清理。0 表示不清理。"
+      }
+    },
+    {
+      "key": "chainCompression.stripFinalAssistantThinking",
+      "type": "boolean",
+      "default": true,
+      "label": { "en": "Drop thinking in chains", "zh-CN": "链内去掉思考" },
+      "description": {
+        "en": "Remove the final assistant's thinking from a compressed chain.",
+        "zh-CN": "压缩调用链时去掉最后一条助手消息里的思考内容。"
+      }
+    },
+    {
+      "key": "chainCompression.fuseRangeSummary",
+      "type": "boolean",
+      "default": true,
+      "label": { "en": "Fuse range summaries", "zh-CN": "合并区间摘要" },
+      "description": {
+        "en": "Let range compression reuse a chain summary instead of summarizing again.",
+        "zh-CN": "区间压缩时复用已有的链摘要，不重复总结。"
+      }
+    },
+    {
+      "key": "purgeErrors.enabled",
+      "type": "boolean",
+      "default": true,
+      "label": { "en": "Purge error output", "zh-CN": "清理报错输出" },
+      "description": {
+        "en": "Drop repeated failing tool calls' arguments from later context.",
+        "zh-CN": "把失败工具调用的重复参数从后续上下文中移除。"
+      }
+    },
+    {
+      "key": "purgeErrors.cooldownTurns",
+      "type": "integer",
+      "default": 2,
+      "min": 0,
+      "max": 20,
+      "control": "slider",
+      "label": { "en": "Error cooldown", "zh-CN": "报错冷却轮数" },
+      "description": {
+        "en": "Turns before a failing call is purged again.",
+        "zh-CN": "失败的调用再次被清理前要等的轮数。"
+      }
+    },
+    {
+      "key": "purgeErrors.minArgChars",
+      "type": "integer",
+      "default": 500,
+      "min": 0,
+      "max": 100000,
+      "unit": "chars",
+      "label": { "en": "Error argument floor", "zh-CN": "报错参数下限" },
+      "description": {
+        "en": "Only purge failing calls whose arguments are at least this long.",
+        "zh-CN": "只清理参数长度不低于这个值的失败调用。"
+      }
+    },
+    {
+      "key": "autoBudgetThreshold",
+      "type": "number",
+      "default": null,
+      "nullable": true,
+      "min": 0,
+      "max": 1,
+      "step": 0.05,
+      "label": { "en": "Auto budget threshold", "zh-CN": "自动预算阈值" },
+      "description": {
+        "en": "Flush when the context reaches this fraction of the window. Empty disables it.",
+        "zh-CN": "上下文达到窗口的这个比例时提前压缩。留空表示不启用。"
+      }
+    },
+    {
+      "key": "spillThreshold",
+      "type": "integer",
+      "default": 65536,
+      "min": 0,
+      "max": 10000000,
+      "unit": "B",
+      "label": { "en": "Spill threshold", "zh-CN": "溢出阈值" },
+      "description": {
+        "en": "Output larger than this is spilled to a file with a preview left in context.",
+        "zh-CN": "超过这个大小的输出会溢出到文件，上下文中只保留预览。"
+      }
+    },
+    {
+      "key": "spillPreviewBytes",
+      "type": "integer",
+      "default": 2048,
+      "min": 0,
+      "max": 1000000,
+      "unit": "B",
+      "label": { "en": "Spill preview", "zh-CN": "溢出预览大小" },
+      "description": {
+        "en": "How much of a spilled output stays in context.",
+        "zh-CN": "溢出后仍在上下文中保留多少内容。"
+      }
+    },
+    {
+      "key": "budgetTurnDelta",
+      "type": "number",
+      "default": null,
+      "nullable": true,
+      "min": 0,
+      "label": { "en": "Budget turn delta", "zh-CN": "预算轮次增量" },
+      "description": {
+        "en": "Context growth per turn that counts as normal. Empty uses the default rule.",
+        "zh-CN": "每轮正常的上下文增长量。留空表示使用默认规则。"
+      }
+    },
+    {
+      "key": "frontierGapThresholdTokens",
+      "type": "integer",
+      "default": null,
+      "nullable": true,
+      "min": 0,
+      "label": { "en": "Frontier gap threshold", "zh-CN": "前沿间隔阈值" },
+      "description": {
+        "en": "Token gap that triggers frontier pruning. Empty uses the default.",
+        "zh-CN": "触发前沿压缩的 token 间隔。留空表示使用默认值。"
+      }
+    },
+    {
+      "key": "maxImagesPerRequest",
+      "type": "integer",
+      "default": null,
+      "nullable": true,
+      "min": 0,
+      "label": { "en": "Image cap", "zh-CN": "图片数量上限" },
+      "description": {
+        "en": "How many images one request may carry. Empty leaves them untouched.",
+        "zh-CN": "单次请求最多携带多少张图片。留空表示不处理。"
+      }
+    }
+  ]
+}

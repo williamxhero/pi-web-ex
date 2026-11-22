@@ -1181,6 +1181,75 @@
   border-color: #ef4444;
 }
 
+.plugin-config-row-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.plugin-config-name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plugin-config-origin {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.plugin-config-restore {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.plugin-config-restore:hover,
+.plugin-config-restore:focus-visible {
+  color: var(--accent);
+}
+
+.plugin-config-number.is-wide {
+  width: 100%;
+}
+
+.plugin-config-select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.plugin-config-select:focus-visible,
+.plugin-config-list:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.plugin-config-list {
+  width: 100%;
+  min-height: 64px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  resize: vertical;
+}
+
 .plugin-config-actions {
   display: flex;
   flex-wrap: wrap;

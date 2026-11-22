@@ -869,43 +869,64 @@ export interface PluginUpdateResult {
   message?: string;
 }
 
-export type PluginConfigValue = boolean | number;
+export type PluginConfigFieldKind = "boolean" | "integer" | "number" | "string" | "enum" | "strings";
 
-/** One row of a plugin's config form, from the definition and that scope's file. */
-export interface PluginConfigFieldInfo {
-  key: string;
-  kind: "boolean" | "integer";
-  /** i18n key of the field's name. */
-  labelKey: string;
-  /** i18n key of the line under the name, when the definition has one. */
-  descriptionKey?: string;
-  /** Integers only: the accepted range, inclusive. */
-  min?: number;
-  max?: number;
-  /** Integers only: a slider for a short range, a number field for a wide one. */
-  control?: "slider" | "number";
-  /** Shown after the value, such as `px`. */
-  unit?: string;
-  /** The file's own value, else the definition's default. */
-  value: PluginConfigValue;
-  /** What the plugin uses when its file does not set the key; Reset writes these. */
-  default: PluginConfigValue;
-  /** The file itself sets this key to a value the plugin accepts. */
-  set: boolean;
+/** A value a plugin's own settings hold; `null` is a key the plugin reads as unset. */
+export type PluginConfigValue = boolean | number | string | string[] | null;
+
+export interface PluginConfigFieldOptionInfo {
+  value: string;
+  labels?: Record<string, string>;
 }
 
-/** One file a plugin reads; the project one refines the global one. */
-export interface PluginConfigScopeInfo {
+/** One row of a plugin's config form, from its descriptor and that layer's values. */
+export interface PluginConfigFieldInfo {
+  key: string;
+  kind: PluginConfigFieldKind;
+  /** Locale-keyed text from the descriptor, which carries its own strings. */
+  labels?: Record<string, string>;
+  descriptions?: Record<string, string>;
+  /** Integers and numbers only: the accepted range, inclusive. */
+  min?: number;
+  max?: number;
+  step?: number;
+  maxLength?: number;
+  control: "switch" | "slider" | "number" | "text" | "select" | "list";
+  /** Shown after the value, such as `px`. */
+  unit?: string;
+  options?: PluginConfigFieldOptionInfo[];
+  /** The plugin accepts null here, which an empty field means. */
+  nullable: boolean;
+  /** The row is only meaningful while another key holds `equals`. */
+  dependsOn?: { key: string; equals: string | number | boolean };
+  /** The value the plugin uses: the first layer that sets it, else the default. */
+  value: PluginConfigValue;
+  /** What the plugin uses when no layer sets the key. */
+  default: PluginConfigValue;
+  /** Which layer `value` came from. */
+  from: "default" | PluginScope;
+  /** The layer being edited sets the key itself. */
+  set: boolean;
+  /** A later layer sets the key too, so this layer's choice is what the plugin sees. */
+  overridden?: { scope: PluginScope; value: PluginConfigValue };
+}
+
+/** One layer of a plugin's settings: the file, or a settings namespace. */
+export interface PluginConfigLayerInfo {
   path: string;
-  /** Unreadable, or not a JSON object: the form shows the defaults and refuses to save. */
+  /** Unreadable, not JSON, or a namespace that is not an object: the layer shows defaults and refuses a save. */
   error?: string;
   fields: PluginConfigFieldInfo[];
 }
 
-/** A plugin's own settings file, editable in its Plugins detail pane. */
+/** A plugin's settings, rendered from the descriptor Pi Web found for it. */
 export interface PluginConfigInfo {
-  fileName: string;
-  scopes: Record<PluginScope, PluginConfigScopeInfo>;
+  /** Which copy of the descriptor was used. */
+  origin: "package" | "user" | "bundled";
+  storage: { type: "file"; file: string } | { type: "settings"; namespace: string };
+  /** The layers the plugin reads, in the order it merges them. */
+  locations: PluginScope[];
+  layers: Record<PluginScope, PluginConfigLayerInfo>;
 }
 
 export interface PluginPackageInfo {

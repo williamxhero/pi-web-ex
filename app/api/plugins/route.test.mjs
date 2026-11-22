@@ -204,21 +204,22 @@ test("enabling keeps an entry's own settings such as autoload", async () => {  c
   assert.deepEqual(await readPackages(), [{ source: alpha, autoload: false }, { source: beta, autoload: false }]);
 });
 
-test("a known plugin's settings file is listed with both scopes and written through set-config", async () => {
+test("a described plugin's settings are listed per layer and written through set-config", async () => {
   await writeFile(settingsPath, JSON.stringify({ packages: ["npm:pi-image-slim"] }));
   const configPath = join(agentDir, "pi-image-slim.json");
 
   const listed = await (await GET(new Request(`http://localhost/api/plugins?cwd=${encodeURIComponent(cwd)}`))).json();
   const known = listed.packages.find((pkg) => pkg.source === "npm:pi-image-slim");
-  assert.equal(known.config.scopes.global.path, configPath);
-  assert.equal(known.config.scopes.project.path, join(cwd, ".pi", "pi-image-slim.json"));
-  const quality = known.config.scopes.global.fields.find((field) => field.key === "quality");
-  assert.deepEqual({ value: quality.value, set: quality.set, min: quality.min, max: quality.max }, {
-    value: 75,
-    set: false,
-    min: 0,
-    max: 100,
-  });
+  assert.deepEqual(known.config.storage, { type: "file", file: "pi-image-slim.json" });
+  assert.deepEqual(known.config.locations, ["global", "project"]);
+  assert.equal(known.config.origin, "bundled");
+  assert.equal(known.config.layers.global.path, configPath);
+  assert.equal(known.config.layers.project.path, join(cwd, ".pi", "pi-image-slim.json"));
+  const quality = known.config.layers.global.fields.find((field) => field.key === "quality");
+  assert.deepEqual(
+    { value: quality.value, from: quality.from, set: quality.set, min: quality.min, max: quality.max },
+    { value: 75, from: "default", set: false, min: 0, max: 100 },
+  );
 
   const response = await postPlugins({
     action: "set-config",
@@ -230,8 +231,22 @@ test("a known plugin's settings file is listed with both scopes and written thro
   const body = await response.json();
   assert.equal(response.status, 200);
   assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { strip: true, quality: 80 });
-  const saved = body.packages.find((pkg) => pkg.source === "npm:pi-image-slim").config.scopes.global.fields;
-  assert.deepEqual(saved.filter((field) => field.set).map((field) => field.key), ["strip", "quality"]);
+  const saved = body.packages.find((pkg) => pkg.source === "npm:pi-image-slim").config.layers;
+  assert.deepEqual(saved.global.fields.filter((field) => field.set).map((field) => field.key), ["strip", "quality"]);
+  // The project layer inherits what the global file now says.
+  const inherited = saved.project.fields.find((field) => field.key === "quality");
+  assert.deepEqual({ value: inherited.value, from: inherited.from }, { value: 80, from: "global" });
+
+  // Removing a key hands the row back to the default.
+  const removed = await postPlugins({
+    action: "set-config",
+    source: "npm:pi-image-slim",
+    scope: "global",
+    configScope: "global",
+    remove: ["quality"],
+  });
+  assert.equal(removed.status, 200);
+  assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { strip: true });
 
   // A value the plugin would ignore is refused, and the file keeps what it had.
   const refused = await postPlugins({
@@ -243,12 +258,12 @@ test("a known plugin's settings file is listed with both scopes and written thro
   });
   assert.equal(refused.status, 400);
   assert.match((await refused.json()).error, /quality/);
-  assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { strip: true, quality: 80 });
+  assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { strip: true });
 
-  // A package whose file Pi Web does not know has no form to save from.
+  // A package with no descriptor anywhere has no form to save from.
   const unknown = await postPlugins({
     action: "set-config",
-    source: "npm:pi-condense",
+    source: "npm:pi-condense-not-described",
     scope: "global",
     configScope: "global",
     values: { quality: 1 },

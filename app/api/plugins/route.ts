@@ -15,7 +15,7 @@ import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security"
 import { getProjectTrustStatus } from "@/lib/project-trust";
 import { isPluginSourceCheckable } from "@/lib/plugin-updates";
 import {
-  pluginConfigDefinition,
+  findPluginConfigDescriptor,
   PluginConfigError,
   readPluginConfig,
   writePluginConfig,
@@ -37,10 +37,6 @@ import type {
 export const dynamic = "force-dynamic";
 
 type PluginAction = "install" | "remove" | "update" | "disable" | "enable" | "set-config";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function emptyCounts(): PluginResourceCounts {
   return { extensions: 0, skills: 0, prompts: 0, themes: 0 };
@@ -281,6 +277,25 @@ function readPackageMetadata(installedPath?: string): { packageName?: string; ve
   }
 }
 
+/**
+ * The folder holding an installed package's `package.json`, where a plugin's
+ * own settings descriptor lives. A configured entry can point at a directory or
+ * at one extension file; the descriptor sits beside the manifest either way.
+ */
+function packageDirectory(installedPath?: string): string | undefined {
+  if (!installedPath) return undefined;
+  try {
+    return statSync(installedPath).isDirectory() ? installedPath : dirname(installedPath);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The descriptors Pi Web ships, beside the app in `plugin-configs/`. */
+function bundledPluginConfigDir(): string {
+  return join(process.cwd(), "plugin-configs");
+}
+
 function collectResource(
   resource: ResolvedResource,
   kind: keyof PluginResourceCounts,
@@ -377,7 +392,16 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
     const resources = resourcesByPackage.get(key) ?? [];
     const resourceCount = counts.extensions + counts.skills + counts.prompts + counts.themes;
     const packageMetadata = readPackageMetadata(pkg.installedPath);
-    const configDefinition = pluginConfigDefinition(pkg.source);
+    // Only a plugin Pi Web has a descriptor for gets a form: its own
+    // `pi.config.json`, the user's copy, or the one shipped here.
+    const descriptor = findPluginConfigDescriptor(pkg.source, {
+      packageDir: packageDirectory(pkg.installedPath),
+      agentDir,
+      bundledDir: bundledPluginConfigDir(),
+    });
+    if (descriptor.error) {
+      diagnostics.push({ type: "warning", source: pkg.source, message: descriptor.error });
+    }
     if (!pkg.installedPath) {
       diagnostics.push({
         type: "warning",
@@ -399,10 +423,14 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
       counts,
       resources,
       status: disabled ? "disabled" : resourceCount > 0 ? "loaded" : pkg.installedPath ? "installed" : "missing",
-      // Only a plugin whose own settings file Pi Web knows gets a form; the
-      // route reads both files, the project one refining the user one.
-      config: configDefinition
-        ? readPluginConfig(configDefinition, { agentDir, cwd, configDir: CONFIG_DIR_NAME })
+      // The route reads both layers, the project one refining the user one, so
+      // a key the project leaves alone shows the value the plugin will use.
+      config: descriptor.descriptor && descriptor.origin
+        ? readPluginConfig(
+          descriptor.descriptor,
+          { agentDir, cwd, configDir: CONFIG_DIR_NAME },
+          descriptor.origin,
+        )
         : undefined,
     } satisfies PluginPackageInfo;
   });
@@ -437,37 +465,55 @@ export async function GET(req: Request) {
 }
 
 /**
- * A plugin's own settings file, written by the Plugins detail pane's form. The
- * values are validated against the definition the form was built from, so a
- * stale page cannot write a key or a value the plugin would ignore.
+ * A plugin's settings, written by the Plugins detail pane's form. The keys come
+ * from the descriptor the panel rendered, so a stale page cannot write a key
+ * the plugin would ignore; the route resolves the descriptor itself rather than
+ * trusting the page's copy.
  */
 async function setPluginConfig(
-  body: { source?: string; configScope?: unknown; values?: unknown; cwd: string },
-  agentDir: string,
-  projectTrusted: boolean,
+  body: {
+    source?: string;
+    configScope?: unknown;
+    values?: unknown;
+    remove?: unknown;
+    cwd: string;
+  },
+  context: {
+    agentDir: string;
+    projectTrusted: boolean;
+    installedPath?: string;
+  },
 ): Promise<Response> {
   const source = body.source?.trim();
   if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
-  const definition = pluginConfigDefinition(source);
-  if (!definition) {
-    return NextResponse.json({ error: `No settings file is known for ${source}` }, { status: 400 });
-  }
   const configScope = readScope(body.configScope);
-  if (configScope === "project" && !projectTrusted) {
+  if (configScope === "project" && !context.projectTrusted) {
     return NextResponse.json(
       { error: "Project resources must be trusted before writing project config" },
       { status: 403 },
     );
   }
-  if (!isRecord(body.values)) {
-    return NextResponse.json({ error: "values must be an object" }, { status: 400 });
+  const found = findPluginConfigDescriptor(source, {
+    packageDir: packageDirectory(context.installedPath),
+    agentDir: context.agentDir,
+    bundledDir: bundledPluginConfigDir(),
+  });
+  if (found.error) return NextResponse.json({ error: found.error }, { status: 400 });
+  if (!found.descriptor) {
+    return NextResponse.json({ error: `No settings descriptor is known for ${source}` }, { status: 400 });
+  }
+  if (!found.descriptor.storage.locations.includes(configScope)) {
+    return NextResponse.json(
+      { error: `This plugin does not read the ${configScope} layer` },
+      { status: 400 },
+    );
   }
   try {
     await writePluginConfig(
-      definition,
-      { agentDir, cwd: body.cwd, configDir: CONFIG_DIR_NAME },
+      found.descriptor,
+      { agentDir: context.agentDir, cwd: body.cwd, configDir: CONFIG_DIR_NAME },
       configScope,
-      body.values,
+      { values: body.values, remove: body.remove },
     );
   } catch (error) {
     if (error instanceof PluginConfigError) {
@@ -497,6 +543,7 @@ export async function POST(req: Request) {
       packages?: unknown;
       configScope?: unknown;
       values?: unknown;
+      remove?: unknown;
       cwd?: string;
     };
     if (!body.cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
@@ -512,12 +559,20 @@ export async function POST(req: Request) {
       projectTrusted: projectTrust.trusted,
     });
 
-    // A settings file belongs to its plugin, not to the package list, so it is
+    // A settings entry belongs to its plugin, not to the package list, so it is
     // written before the package-scope gate below: a global package can be
     // configured for one project.
     if (body.action === "set-config") {
       const cwd = body.cwd;
-      return await setPluginConfig({ ...body, cwd }, agentDir, projectTrust.trusted);
+      const packageScope = readScope(body.scope);
+      const configured = new DefaultPackageManager({ cwd, agentDir, settingsManager }).listConfiguredPackages();
+      const entry = configured.find((pkg) => pkg.source === body.source && toPluginScope(pkg.scope) === packageScope)
+        ?? configured.find((pkg) => pkg.source === body.source);
+      return await setPluginConfig({ ...body, cwd }, {
+        agentDir,
+        projectTrusted: projectTrust.trusted,
+        installedPath: entry?.installedPath,
+      });
     }
 
     if (body.packages !== undefined) {

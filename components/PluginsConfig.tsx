@@ -5,7 +5,6 @@ import { sendAgentCommand } from "@/lib/agent-client";
 import type {
   PluginConfigFieldInfo,
   PluginConfigInfo,
-  PluginConfigScopeInfo,
   PluginConfigValue,
   PluginPackageInfo,
   PluginStandaloneExtensionInfo,
@@ -159,26 +158,56 @@ function statusColor(status: PluginPackageInfo["status"]): string {
   return "#ef4444";
 }
 
-/** The form's draft: booleans kept as switches, numbers as typed text so a
- * field can be cleared and retyped instead of jumping to 0. */
+/** The form's draft: booleans as switches, everything else as typed text
+ * (a list as one entry per line), so a field can be cleared and retyped. */
 type ConfigDraft = Record<string, boolean | string>;
 
-/** A scope's own values, the ones saving there writes. */
-function draftFromScope(scope: PluginConfigScopeInfo): ConfigDraft {
+/** A descriptor's text for the current locale, English when it has no better. */
+function pickText(map: Record<string, string> | undefined, locale: string, fallback: string): string {
+  if (!map) return fallback;
+  const language = locale.toLowerCase();
+  const exact = map[locale] ?? map[language];
+  if (exact) return exact;
+  const base = language.split("-")[0];
+  const near = Object.entries(map).find(([key]) => key.toLowerCase().split("-")[0] === base);
+  return near?.[1] ?? map.en ?? Object.values(map)[0] ?? fallback;
+}
+
+/** One value as the form's text, before anything is typed. */
+function draftText(field: PluginConfigFieldInfo, value: PluginConfigValue): boolean | string {
+  if (field.kind === "boolean") return value === true;
+  if (field.kind === "strings") return Array.isArray(value) ? value.join("\n") : "";
+  return value === null || value === undefined ? "" : String(value);
+}
+
+/** Every row of a layer as its effective value: this layer, else global, else the default. */
+function draftFromFields(fields: PluginConfigFieldInfo[]): ConfigDraft {
   const draft: ConfigDraft = {};
-  for (const field of scope.fields) {
-    draft[field.key] = typeof field.value === "boolean" ? field.value : String(field.value);
-  }
+  for (const field of fields) draft[field.key] = draftText(field, field.value);
   return draft;
 }
 
-/** What Reset puts in the form: the values the plugin uses when its file says nothing. */
-function draftFromDefaults(fields: PluginConfigFieldInfo[]): ConfigDraft {
-  const draft: ConfigDraft = {};
-  for (const field of fields) {
-    draft[field.key] = typeof field.default === "boolean" ? field.default : String(field.default);
-  }
-  return draft;
+/** The keys a layer itself sets: the ones a save may rewrite or remove. */
+function layerKeys(fields: PluginConfigFieldInfo[]): Set<string> {
+  return new Set(fields.filter((field) => field.set).map((field) => field.key));
+}
+
+/** What a row shows once this layer stops setting it. */
+function fallbackValue(
+  field: PluginConfigFieldInfo,
+  scope: PluginScope,
+  globalFields: PluginConfigFieldInfo[],
+): PluginConfigValue {
+  if (scope === "global") return field.default;
+  return globalFields.find((candidate) => candidate.key === field.key)?.value ?? field.default;
+}
+
+/** A value as it reads in a note, such as "overridden by this project: 80". */
+function configValueText(value: PluginConfigValue, t: Translate): string {
+  if (value === null || value === undefined) return t("plugins.config.notSet");
+  if (typeof value === "boolean") return value ? t("plugins.config.on") : t("plugins.config.off");
+  if (Array.isArray(value)) return value.length > 0 ? value.join(", ") : t("plugins.config.none");
+  return String(value);
 }
 
 /**
@@ -190,19 +219,42 @@ function draftFromDefaults(fields: PluginConfigFieldInfo[]): ConfigDraft {
 function submittedConfig(
   fields: PluginConfigFieldInfo[],
   draft: ConfigDraft,
+  overrides: Set<string>,
 ): { values: Record<string, PluginConfigValue>; invalid: Set<string> } {
   const values: Record<string, PluginConfigValue> = {};
   const invalid = new Set<string>();
   for (const field of fields) {
+    if (!overrides.has(field.key)) continue;
     const raw = draft[field.key];
-    if (typeof raw === "boolean") {
-      values[field.key] = raw;
+    if (field.kind === "boolean") {
+      values[field.key] = raw === true;
       continue;
     }
-    const number = Number(raw);
+    const text = typeof raw === "string" ? raw : "";
+    if (field.kind === "strings") {
+      values[field.key] = text.split("\n").map((line) => line.trim()).filter(Boolean);
+      continue;
+    }
+    if (field.kind === "string") {
+      if (field.maxLength !== undefined && text.length > field.maxLength) invalid.add(field.key);
+      else values[field.key] = text;
+      continue;
+    }
+    if (field.kind === "enum") {
+      if (field.options?.some((option) => option.value === text)) values[field.key] = text;
+      else invalid.add(field.key);
+      continue;
+    }
+    const trimmed = text.trim();
+    if (trimmed === "") {
+      if (field.nullable) values[field.key] = null;
+      else invalid.add(field.key);
+      continue;
+    }
+    const number = Number(trimmed);
     if (
-      raw.trim() === ""
-      || !Number.isInteger(number)
+      !Number.isFinite(number)
+      || (field.kind === "integer" && !Number.isInteger(number))
       || (field.min !== undefined && number < field.min)
       || (field.max !== undefined && number > field.max)
     ) {
@@ -215,11 +267,11 @@ function submittedConfig(
 }
 
 /**
- * A plugin's own settings file, at the bottom of its detail pane. The panel
- * never guesses: the fields come from the definition the route knows for this
- * package, and the scope switch chooses which of the two files is edited,
- * showing that file's values rather than the merged result it would otherwise
- * write back.
+ * A plugin's settings, at the bottom of its detail pane. Every row shows the
+ * value in force — this layer's, else the global one, else the default — and
+ * which of those it is. A save writes only the rows marked as this layer's own
+ * choices, so a project that leaves a key alone keeps following the global
+ * value the plugin actually reads.
  */
 function PluginConfigForm({
   config,
@@ -236,23 +288,60 @@ function PluginConfigForm({
   saving: boolean;
   error: string | null;
   message: string | null;
-  onSave: (scope: PluginScope, values: Record<string, PluginConfigValue>) => void;
+  onSave: (
+    scope: PluginScope,
+    changes: { values: Record<string, PluginConfigValue>; remove: string[] },
+  ) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const id = useId();
-  const [scope, setScope] = useState<PluginScope>(initialScope);
-  const [draft, setDraft] = useState<ConfigDraft>(() => draftFromScope(config.scopes[initialScope]));
+  const startingScope = (): PluginScope =>
+    config.locations.includes(initialScope) ? initialScope : config.locations[0] ?? "global";
+  const [scope, setScope] = useState<PluginScope>(startingScope);
+  const [draft, setDraft] = useState<ConfigDraft>(() => draftFromFields(config.layers[startingScope()].fields));
+  const [overrides, setOverrides] = useState<Set<string>>(() => layerKeys(config.layers[startingScope()].fields));
 
-  // A save replaces the values the form was built from, and switching the file
-  // starts from that file's own values, never from the other one's unsaved ones.
+  // A save replaces the values this form was built from, and another layer
+  // starts from its own keys over the values it inherits.
   useEffect(() => {
-    setDraft(draftFromScope(config.scopes[scope]));
+    const fields = config.layers[scope].fields;
+    setDraft(draftFromFields(fields));
+    setOverrides(layerKeys(fields));
   }, [config, scope]);
 
-  const file = config.scopes[scope];
-  const { values, invalid } = submittedConfig(file.fields, draft);
-  const overridden = scope === "global" && config.scopes.project.fields.some((field) => field.set);
-  const saveDisabled = saving || Boolean(file.error) || invalid.size > 0;
+  const layer = config.layers[scope];
+  const globalFields = config.layers.global.fields;
+  const { values, invalid } = submittedConfig(layer.fields, draft, overrides);
+  const remove = layer.fields
+    .filter((field) => field.set && !overrides.has(field.key))
+    .map((field) => field.key);
+  const nothingToWrite = Object.keys(values).length === 0 && remove.length === 0;
+  const saveDisabled = saving || Boolean(layer.error) || invalid.size > 0 || nothingToWrite;
+
+  const fallback = (field: PluginConfigFieldInfo) => fallbackValue(field, scope, globalFields);
+  const setValue = (field: PluginConfigFieldInfo, value: boolean | string) => {
+    setDraft((current) => ({ ...current, [field.key]: value }));
+    setOverrides((current) => (current.has(field.key) ? current : new Set([...current, field.key])));
+  };
+  const restore = (field: PluginConfigFieldInfo) => {
+    setDraft((current) => ({ ...current, [field.key]: draftText(field, fallback(field)) }));
+    setOverrides((current) => {
+      const next = new Set(current);
+      next.delete(field.key);
+      return next;
+    });
+  };
+  const clearLayer = () => {
+    setDraft(draftFromFields(layer.fields.map((field) => ({ ...field, value: fallback(field) }))));
+    setOverrides(new Set());
+  };
+
+  const readsLayer = (target: PluginScope) => config.locations.includes(target);
+  const disabledReason = !readsLayer("project")
+    ? t("plugins.config.layerUnavailable")
+    : !projectResourcesLoaded
+      ? t("plugins.config.projectUntrusted")
+      : undefined;
 
   return (
     <div className="plugin-config">
@@ -261,91 +350,164 @@ function PluginConfigForm({
         value={scope}
         label={t("config.saveTo")}
         options={[
-          { value: "global", label: scopeLabel("global", t) },
-          { value: "project", label: scopeLabel("project", t), disabled: !projectResourcesLoaded },
+          { value: "global", label: scopeLabel("global", t), disabled: !readsLayer("global") },
+          { value: "project", label: scopeLabel("project", t), disabled: !readsLayer("project") },
         ]}
-        path={shortenPath(file.path)}
-        disabledReason={t("plugins.config.projectUntrusted")}
+        path={shortenPath(layer.path)}
+        disabledReason={disabledReason}
         onChange={setScope}
       />
-      {overridden && <p className="plugin-config-note">{t("plugins.config.projectOverrides")}</p>}
-      {file.error && <div className="plugin-config-error">{file.error}</div>}
+      <p className="plugin-config-note">
+        {t("plugins.config.descriptorFrom", { origin: t(`plugins.config.origin.${config.origin}`) })}
+      </p>
+      {layer.error && <div className="plugin-config-error">{layer.error}</div>}
       <div className="plugin-config-fields">
-        {file.fields.map((field) => {
+        {layer.fields.map((field) => {
           const controlId = `${id}-${field.key}`;
-          const label = t(field.labelKey);
-          const description = field.descriptionKey ? t(field.descriptionKey) : null;
+          const label = pickText(field.labels, locale, field.key);
+          const description = pickText(field.descriptions, locale, "");
           const descriptionId = `${controlId}-description`;
-          if (field.kind === "boolean") {
-            return (
-              <div key={field.key} className="plugin-config-field">
-                <div className="plugin-config-row">
-                  <div className="plugin-config-text">
-                    <span className="plugin-config-name">{label}</span>
-                    {description && (
-                      <p id={descriptionId} className="plugin-config-description">{description}</p>
-                    )}
-                  </div>
-                  <ConfigSwitch
-                    checked={draft[field.key] === true}
-                    label={label}
-                    describedBy={description ? descriptionId : undefined}
-                    onChange={(checked) => setDraft((current) => ({ ...current, [field.key]: checked }))}
-                  />
-                </div>
-              </div>
-            );
-          }
-          const raw = draft[field.key];
-          const text = typeof raw === "string" ? raw : String(raw);
-          const bad = invalid.has(field.key);
           const hintId = `${controlId}-hint`;
-          const set = (value: string) => setDraft((current) => ({ ...current, [field.key]: value }));
+          const bad = invalid.has(field.key);
+          const raw = draft[field.key];
+          const text = typeof raw === "string" ? raw : "";
+          const own = overrides.has(field.key);
+          const origin = own
+            ? null
+            : field.from === "global"
+              ? t("plugins.config.inheritGlobal")
+              : t("plugins.config.inheritDefault");
+          const overridden = field.overridden
+            ? t("plugins.config.overriddenByProject", { value: configValueText(field.overridden.value, t) })
+            : null;
+          const dependency = field.dependsOn
+            ? layer.fields.find((candidate) => candidate.key === field.dependsOn?.key)
+            : undefined;
+          const inactive = field.dependsOn && dependency
+            && dependency.value !== field.dependsOn.equals
+            ? t("plugins.config.dependsOn", {
+              label: pickText(dependency.labels, locale, dependency.key),
+              value: configValueText(field.dependsOn.equals, t),
+            })
+            : null;
+          const hint = field.kind === "enum"
+            ? t("plugins.config.invalidOption")
+            : field.kind === "string"
+              ? t("plugins.config.invalidLength", { max: field.maxLength ?? 0 })
+              : field.min !== undefined && field.max !== undefined
+                ? t("plugins.config.invalidRange", { min: field.min, max: field.max })
+                : t("plugins.config.invalidNumber");
+          const describedBy = bad ? hintId : description ? descriptionId : undefined;
+
+          const control = field.control === "switch" ? null : field.control === "slider" ? (
+            <input
+              id={controlId}
+              type="range"
+              min={field.min}
+              max={field.max}
+              step={field.step ?? 1}
+              value={text}
+              aria-describedby={describedBy}
+              onChange={(event) => setValue(field, event.target.value)}
+            />
+          ) : field.control === "select" ? (
+            <select
+              id={controlId}
+              className="plugin-config-select"
+              value={text}
+              aria-describedby={describedBy}
+              onChange={(event) => setValue(field, event.target.value)}
+            >
+              {field.options?.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {pickText(option.labels, locale, option.value)}
+                </option>
+              ))}
+            </select>
+          ) : field.control === "list" ? (
+            <textarea
+              id={controlId}
+              className="plugin-config-list"
+              rows={3}
+              value={text}
+              placeholder={t("plugins.config.onePerLine")}
+              aria-describedby={describedBy}
+              onChange={(event) => setValue(field, event.target.value)}
+            />
+          ) : field.control === "text" ? (
+            <input
+              id={controlId}
+              type="text"
+              className="plugin-config-number is-wide"
+              value={text}
+              maxLength={field.maxLength}
+              aria-invalid={bad || undefined}
+              aria-describedby={describedBy}
+              onChange={(event) => setValue(field, event.target.value)}
+            />
+          ) : (
+            <div className="plugin-config-number-row">
+              <input
+                id={controlId}
+                type="number"
+                className="plugin-config-number"
+                min={field.min}
+                max={field.max}
+                step={field.kind === "integer" ? 1 : "any"}
+                value={text}
+                placeholder={field.nullable ? t("plugins.config.notSet") : undefined}
+                aria-invalid={bad || undefined}
+                aria-describedby={describedBy}
+                onChange={(event) => setValue(field, event.target.value)}
+              />
+              {field.unit && <span className="plugin-config-unit">{field.unit}</span>}
+            </div>
+          );
+
           return (
             <div key={field.key} className="plugin-config-field">
               <div className="plugin-config-row">
-                <label htmlFor={controlId} className="plugin-config-name">{label}</label>
-                {field.control === "slider" && (
-                  <output htmlFor={controlId} className="plugin-config-value">
-                    {text}{field.unit ? ` ${field.unit}` : ""}
-                  </output>
-                )}
-              </div>
-              {field.control === "slider" ? (
-                <input
-                  id={controlId}
-                  type="range"
-                  min={field.min}
-                  max={field.max}
-                  step={1}
-                  value={text}
-                  aria-describedby={description ? descriptionId : undefined}
-                  onChange={(event) => set(event.target.value)}
-                />
-              ) : (
-                <div className="plugin-config-number-row">
-                  <input
-                    id={controlId}
-                    type="number"
-                    className="plugin-config-number"
-                    min={field.min}
-                    max={field.max}
-                    step={1}
-                    value={text}
-                    aria-invalid={bad || undefined}
-                    aria-describedby={bad ? hintId : description ? descriptionId : undefined}
-                    onChange={(event) => set(event.target.value)}
-                  />
-                  {field.unit && <span className="plugin-config-unit">{field.unit}</span>}
+                <div className="plugin-config-text">
+                  <span className="plugin-config-name-row">
+                    {field.control === "switch"
+                      ? <span className="plugin-config-name">{label}</span>
+                      : <label htmlFor={controlId} className="plugin-config-name">{label}</label>}
+                    {origin && <span className="plugin-config-origin">{origin}</span>}
+                  </span>
                 </div>
+                <div className="plugin-config-row-actions">
+                  {own && (
+                    <button
+                      type="button"
+                      className="plugin-config-restore"
+                      onClick={() => restore(field)}
+                    >
+                      {t("plugins.config.restore")}
+                    </button>
+                  )}
+                  {field.control === "switch" ? (
+                    <ConfigSwitch
+                      checked={raw === true}
+                      label={label}
+                      describedBy={describedBy}
+                      onChange={(checked) => setValue(field, checked)}
+                    />
+                  ) : field.control === "slider" ? (
+                    <output htmlFor={controlId} className="plugin-config-value">
+                      {text}{field.unit ? ` ${field.unit}` : ""}
+                    </output>
+                  ) : null}
+                </div>
+              </div>
+              {control}
+              {bad && (
+                <p id={hintId} className="plugin-config-hint">{hint}</p>
               )}
-              {bad ? (
-                <p id={hintId} className="plugin-config-hint">
-                  {t("plugins.config.invalidRange", { min: field.min ?? 0, max: field.max ?? 0 })}
-                </p>
-              ) : description ? (
+              {description && !bad && (
                 <p id={descriptionId} className="plugin-config-description">{description}</p>
-              ) : null}
+              )}
+              {overridden && <p className="plugin-config-description">{overridden}</p>}
+              {inactive && <p className="plugin-config-description">{inactive}</p>}
             </div>
           );
         })}
@@ -355,16 +517,16 @@ function PluginConfigForm({
           variant="primary"
           size="small"
           disabled={saveDisabled}
-          onClick={() => onSave(scope, values)}
+          onClick={() => onSave(scope, { values, remove })}
         >
           {saving ? t("i18n.saving") : t("i18n.save")}
         </ConfigButton>
         <ConfigButton
           size="small"
-          disabled={saving || Boolean(file.error)}
-          onClick={() => setDraft(draftFromDefaults(file.fields))}
+          disabled={saving || Boolean(layer.error) || (overrides.size === 0 && remove.length === 0)}
+          onClick={clearLayer}
         >
-          {t("plugins.config.reset")}
+          {t("plugins.config.clearLayer")}
         </ConfigButton>
       </div>
       {message && <div className="plugin-config-message">{message}</div>}
@@ -574,7 +736,10 @@ function PackageDetail({
   onAction: (action: PluginAction, pkg: PluginPackageInfo) => void;
   onCheckUpdate: () => void;
   onReloadSession: () => void;
-  onSaveConfig: (scope: PluginScope, values: Record<string, PluginConfigValue>) => void;
+  onSaveConfig: (
+    scope: PluginScope,
+    changes: { values: Record<string, PluginConfigValue>; remove: string[] },
+  ) => void;
 }) {
   const { t } = useI18n();
   const key = packageKey(pkg);
@@ -1114,7 +1279,7 @@ export function PluginsConfig({
   const saveConfig = useCallback(async (
     pkg: PluginPackageInfo,
     scope: PluginScope,
-    values: Record<string, PluginConfigValue>,
+    changes: { values: Record<string, PluginConfigValue>; remove: string[] },
   ) => {
     setConfigBusyKey(packageKey(pkg));
     setConfigError(null);
@@ -1128,7 +1293,8 @@ export function PluginsConfig({
           source: pkg.source,
           scope: pkg.scope,
           configScope: scope,
-          values,
+          values: changes.values,
+          remove: changes.remove,
           cwd,
         }),
       });
@@ -1318,7 +1484,7 @@ export function PluginsConfig({
                 onAction={runAction}
                 onCheckUpdate={() => void checkForUpdates(selectedPackage)}
                 onReloadSession={reloadSession}
-                onSaveConfig={(scope, values) => void saveConfig(selectedPackage, scope, values)}
+                onSaveConfig={(scope, changes) => void saveConfig(selectedPackage, scope, changes)}
               />
               ) : (
                 <ConfigEmptyState>{t("i18n.selectPackage")}</ConfigEmptyState>

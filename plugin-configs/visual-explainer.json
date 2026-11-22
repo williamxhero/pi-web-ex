@@ -1,0 +1,16 @@
+{
+  "storage": { "type": "settings", "namespace": "visualExplainer" },
+  "fields": [
+    {
+      "key": "outputDir",
+      "type": "string",
+      "default": "",
+      "maxLength": 1024,
+      "label": { "en": "Output folder", "zh-CN": "输出目录" },
+      "description": {
+        "en": "Where rendered pages go. \"project\" uses the Git root's .agent/diagrams. Empty keeps ~/.agent/diagrams.",
+        "zh-CN": "渲染出的页面存放位置。填 project 表示放在 Git 根目录的 .agent/diagrams。留空则用 ~/.agent/diagrams。"
+      }
+    }
+  ]
+}
