@@ -70,12 +70,26 @@ function readJsonObject(path: string): { object: Record<string, unknown>; error?
   return { object: parsed };
 }
 
+/**
+ * The name a descriptor is looked up by: an npm source already carries one,
+ * while a git checkout or a local folder carries it in its own package.json.
+ */
+function descriptorName(source: string, packageDir: string | undefined): string | undefined {
+  const npm = parseNpmSource(source)?.name;
+  if (npm) return npm;
+  if (!packageDir) return undefined;
+  const manifest = readJsonObject(join(packageDir, "package.json"));
+  if (manifest.error) return undefined;
+  const name = manifest.object.name;
+  return typeof name === "string" && name.trim() && !/[\\/]/.test(name) ? name.trim() : undefined;
+}
+
 /** Every path a descriptor may be read from, most authoritative first. */
 function descriptorCandidates(
   source: string,
   paths: { packageDir?: string; agentDir: string; bundledDir: string },
 ): { origin: DescriptorOrigin; path: string }[] {
-  const name = parseNpmSource(source)?.name;
+  const name = descriptorName(source, paths.packageDir);
   if (!name) return [];
   const candidates: { origin: DescriptorOrigin; path: string }[] = [];
   if (paths.packageDir) candidates.push({ origin: "package", path: join(paths.packageDir, "pi.config.json") });
