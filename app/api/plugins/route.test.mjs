@@ -191,8 +191,7 @@ test("bulk disable leaves a filtered package alone and says why", async () => {
   assert.deepEqual(await readPackages(), [{ source: alpha, ...off }, filtered]);
 });
 
-test("enabling keeps an entry's own settings such as autoload", async () => {
-  const [alpha, beta] = await Promise.all(["bulk-alpha", "bulk-beta"].map(makePackage));
+test("enabling keeps an entry's own settings such as autoload", async () => {  const [alpha, beta] = await Promise.all(["bulk-alpha", "bulk-beta"].map(makePackage));
   await writeFile(settingsPath, JSON.stringify({
     packages: [{ source: alpha, autoload: false, ...off }, { source: beta, autoload: false, ...off }],
   }));
@@ -203,4 +202,59 @@ test("enabling keeps an entry's own settings such as autoload", async () => {
   assert.equal(bulk.status, 200);
 
   assert.deepEqual(await readPackages(), [{ source: alpha, autoload: false }, { source: beta, autoload: false }]);
+});
+
+test("a known plugin's settings file is listed with both scopes and written through set-config", async () => {
+  await writeFile(settingsPath, JSON.stringify({ packages: ["npm:pi-image-slim"] }));
+  const configPath = join(agentDir, "pi-image-slim.json");
+
+  const listed = await (await GET(new Request(`http://localhost/api/plugins?cwd=${encodeURIComponent(cwd)}`))).json();
+  const known = listed.packages.find((pkg) => pkg.source === "npm:pi-image-slim");
+  assert.equal(known.config.scopes.global.path, configPath);
+  assert.equal(known.config.scopes.project.path, join(cwd, ".pi", "pi-image-slim.json"));
+  const quality = known.config.scopes.global.fields.find((field) => field.key === "quality");
+  assert.deepEqual({ value: quality.value, set: quality.set, min: quality.min, max: quality.max }, {
+    value: 75,
+    set: false,
+    min: 0,
+    max: 100,
+  });
+
+  const response = await postPlugins({
+    action: "set-config",
+    source: "npm:pi-image-slim",
+    scope: "global",
+    configScope: "global",
+    values: { strip: true, quality: 80 },
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { strip: true, quality: 80 });
+  const saved = body.packages.find((pkg) => pkg.source === "npm:pi-image-slim").config.scopes.global.fields;
+  assert.deepEqual(saved.filter((field) => field.set).map((field) => field.key), ["strip", "quality"]);
+
+  // A value the plugin would ignore is refused, and the file keeps what it had.
+  const refused = await postPlugins({
+    action: "set-config",
+    source: "npm:pi-image-slim",
+    scope: "global",
+    configScope: "global",
+    values: { quality: 101 },
+  });
+  assert.equal(refused.status, 400);
+  assert.match((await refused.json()).error, /quality/);
+  assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { strip: true, quality: 80 });
+
+  // A package whose file Pi Web does not know has no form to save from.
+  const unknown = await postPlugins({
+    action: "set-config",
+    source: "npm:pi-condense",
+    scope: "global",
+    configScope: "global",
+    values: { quality: 1 },
+  });
+  assert.equal(unknown.status, 400);
+
+  await writeFile(settingsPath, JSON.stringify({ packages: [] }));
+  await rm(configPath, { force: true });
 });

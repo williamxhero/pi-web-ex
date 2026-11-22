@@ -869,6 +869,45 @@ export interface PluginUpdateResult {
   message?: string;
 }
 
+export type PluginConfigValue = boolean | number;
+
+/** One row of a plugin's config form, from the definition and that scope's file. */
+export interface PluginConfigFieldInfo {
+  key: string;
+  kind: "boolean" | "integer";
+  /** i18n key of the field's name. */
+  labelKey: string;
+  /** i18n key of the line under the name, when the definition has one. */
+  descriptionKey?: string;
+  /** Integers only: the accepted range, inclusive. */
+  min?: number;
+  max?: number;
+  /** Integers only: a slider for a short range, a number field for a wide one. */
+  control?: "slider" | "number";
+  /** Shown after the value, such as `px`. */
+  unit?: string;
+  /** The file's own value, else the definition's default. */
+  value: PluginConfigValue;
+  /** What the plugin uses when its file does not set the key; Reset writes these. */
+  default: PluginConfigValue;
+  /** The file itself sets this key to a value the plugin accepts. */
+  set: boolean;
+}
+
+/** One file a plugin reads; the project one refines the global one. */
+export interface PluginConfigScopeInfo {
+  path: string;
+  /** Unreadable, or not a JSON object: the form shows the defaults and refuses to save. */
+  error?: string;
+  fields: PluginConfigFieldInfo[];
+}
+
+/** A plugin's own settings file, editable in its Plugins detail pane. */
+export interface PluginConfigInfo {
+  fileName: string;
+  scopes: Record<PluginScope, PluginConfigScopeInfo>;
+}
+
 export interface PluginPackageInfo {
   source: string;
   scope: PluginScope;
@@ -883,6 +922,8 @@ export interface PluginPackageInfo {
   counts: PluginResourceCounts;
   resources: PluginResourceInfo[];
   status: "loaded" | "installed" | "missing" | "disabled";
+  /** Present when Pi Web knows this plugin's settings file. */
+  config?: PluginConfigInfo;
 }
 
 export interface PluginsResponse {

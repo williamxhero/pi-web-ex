@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { existsSync, readFileSync, statSync } from "fs";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 import {
+  CONFIG_DIR_NAME,
   DefaultPackageManager,
   getAgentDir,
   SettingsManager,
@@ -13,6 +14,12 @@ import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-acces
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import { getProjectTrustStatus } from "@/lib/project-trust";
 import { isPluginSourceCheckable } from "@/lib/plugin-updates";
+import {
+  pluginConfigDefinition,
+  PluginConfigError,
+  readPluginConfig,
+  writePluginConfig,
+} from "@/lib/plugin-config";
 import { invalidateModelRuntimeWithExtensions } from "@/lib/model-runtime";
 import type {
   PluginDiagnostic,
@@ -29,7 +36,11 @@ import type {
 
 export const dynamic = "force-dynamic";
 
-type PluginAction = "install" | "remove" | "update" | "disable" | "enable";
+type PluginAction = "install" | "remove" | "update" | "disable" | "enable" | "set-config";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function emptyCounts(): PluginResourceCounts {
   return { extensions: 0, skills: 0, prompts: 0, themes: 0 };
@@ -366,6 +377,7 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
     const resources = resourcesByPackage.get(key) ?? [];
     const resourceCount = counts.extensions + counts.skills + counts.prompts + counts.themes;
     const packageMetadata = readPackageMetadata(pkg.installedPath);
+    const configDefinition = pluginConfigDefinition(pkg.source);
     if (!pkg.installedPath) {
       diagnostics.push({
         type: "warning",
@@ -387,6 +399,11 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
       counts,
       resources,
       status: disabled ? "disabled" : resourceCount > 0 ? "loaded" : pkg.installedPath ? "installed" : "missing",
+      // Only a plugin whose own settings file Pi Web knows gets a form; the
+      // route reads both files, the project one refining the user one.
+      config: configDefinition
+        ? readPluginConfig(configDefinition, { agentDir, cwd, configDir: CONFIG_DIR_NAME })
+        : undefined,
     } satisfies PluginPackageInfo;
   });
 
@@ -419,6 +436,48 @@ export async function GET(req: Request) {
   }
 }
 
+/**
+ * A plugin's own settings file, written by the Plugins detail pane's form. The
+ * values are validated against the definition the form was built from, so a
+ * stale page cannot write a key or a value the plugin would ignore.
+ */
+async function setPluginConfig(
+  body: { source?: string; configScope?: unknown; values?: unknown; cwd: string },
+  agentDir: string,
+  projectTrusted: boolean,
+): Promise<Response> {
+  const source = body.source?.trim();
+  if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
+  const definition = pluginConfigDefinition(source);
+  if (!definition) {
+    return NextResponse.json({ error: `No settings file is known for ${source}` }, { status: 400 });
+  }
+  const configScope = readScope(body.configScope);
+  if (configScope === "project" && !projectTrusted) {
+    return NextResponse.json(
+      { error: "Project resources must be trusted before writing project config" },
+      { status: 403 },
+    );
+  }
+  if (!isRecord(body.values)) {
+    return NextResponse.json({ error: "values must be an object" }, { status: 400 });
+  }
+  try {
+    await writePluginConfig(
+      definition,
+      { agentDir, cwd: body.cwd, configDir: CONFIG_DIR_NAME },
+      configScope,
+      body.values,
+    );
+  } catch (error) {
+    if (error instanceof PluginConfigError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    throw error;
+  }
+  return NextResponse.json(await readPlugins(body.cwd));
+}
+
 // POST /api/plugins body: { action, source?, scope?, cwd }
 // enable/disable also take { packages: [{ source, scope }] } in place of
 // source/scope and add per-package `results` to the response.
@@ -436,6 +495,8 @@ export async function POST(req: Request) {
       source?: string;
       scope?: PluginScope;
       packages?: unknown;
+      configScope?: unknown;
+      values?: unknown;
       cwd?: string;
     };
     if (!body.cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
@@ -450,6 +511,14 @@ export async function POST(req: Request) {
     const settingsManager = SettingsManager.create(body.cwd, agentDir, {
       projectTrusted: projectTrust.trusted,
     });
+
+    // A settings file belongs to its plugin, not to the package list, so it is
+    // written before the package-scope gate below: a global package can be
+    // configured for one project.
+    if (body.action === "set-config") {
+      const cwd = body.cwd;
+      return await setPluginConfig({ ...body, cwd }, agentDir, projectTrust.trusted);
+    }
 
     if (body.packages !== undefined) {
       if (body.action !== "enable" && body.action !== "disable") {

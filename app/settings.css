@@ -1079,6 +1079,141 @@
   text-align: right;
 }
 
+/* A plugin's own settings file, at the bottom of its detail pane: one row per
+   key of the definition, over the file's scope switch (components/PluginsConfig.tsx). */
+.plugin-config {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.plugin-config-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.plugin-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plugin-config-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.plugin-config-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.plugin-config-name {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.plugin-config-description {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.plugin-config-value {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.plugin-config-field input[type="range"] {
+  display: block;
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.plugin-config-number-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plugin-config-unit {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.plugin-config-number {
+  width: 110px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.plugin-config-number:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.plugin-config-number[aria-invalid="true"] {
+  border-color: #ef4444;
+}
+
+.plugin-config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.plugin-config-note {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.plugin-config-hint {
+  margin: 0;
+  color: #d97706;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.plugin-config-message {
+  font-size: 12px;
+  color: #16a34a;
+}
+
+.plugin-config-error {
+  font-size: 12px;
+  color: #ef4444;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .skill-source-link {
   display: flex;
   align-items: center;

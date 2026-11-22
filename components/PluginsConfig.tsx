@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { sendAgentCommand } from "@/lib/agent-client";
 import type {
+  PluginConfigFieldInfo,
+  PluginConfigInfo,
+  PluginConfigScopeInfo,
+  PluginConfigValue,
   PluginPackageInfo,
   PluginStandaloneExtensionInfo,
   PluginUpdateResult,
@@ -153,6 +157,220 @@ function statusColor(status: PluginPackageInfo["status"]): string {
   if (status === "installed") return "#f59e0b";
   if (status === "disabled") return "var(--text-dim)";
   return "#ef4444";
+}
+
+/** The form's draft: booleans kept as switches, numbers as typed text so a
+ * field can be cleared and retyped instead of jumping to 0. */
+type ConfigDraft = Record<string, boolean | string>;
+
+/** A scope's own values, the ones saving there writes. */
+function draftFromScope(scope: PluginConfigScopeInfo): ConfigDraft {
+  const draft: ConfigDraft = {};
+  for (const field of scope.fields) {
+    draft[field.key] = typeof field.value === "boolean" ? field.value : String(field.value);
+  }
+  return draft;
+}
+
+/** What Reset puts in the form: the values the plugin uses when its file says nothing. */
+function draftFromDefaults(fields: PluginConfigFieldInfo[]): ConfigDraft {
+  const draft: ConfigDraft = {};
+  for (const field of fields) {
+    draft[field.key] = typeof field.default === "boolean" ? field.default : String(field.default);
+  }
+  return draft;
+}
+
+/**
+ * The values to submit, and the number fields the plugin would refuse (empty,
+ * not whole, or outside the range the field states). A slider cannot be
+ * invalid; a typed number can, so Save waits for it to become one the plugin
+ * accepts rather than writing a value the runtime silently ignores.
+ */
+function submittedConfig(
+  fields: PluginConfigFieldInfo[],
+  draft: ConfigDraft,
+): { values: Record<string, PluginConfigValue>; invalid: Set<string> } {
+  const values: Record<string, PluginConfigValue> = {};
+  const invalid = new Set<string>();
+  for (const field of fields) {
+    const raw = draft[field.key];
+    if (typeof raw === "boolean") {
+      values[field.key] = raw;
+      continue;
+    }
+    const number = Number(raw);
+    if (
+      raw.trim() === ""
+      || !Number.isInteger(number)
+      || (field.min !== undefined && number < field.min)
+      || (field.max !== undefined && number > field.max)
+    ) {
+      invalid.add(field.key);
+      continue;
+    }
+    values[field.key] = number;
+  }
+  return { values, invalid };
+}
+
+/**
+ * A plugin's own settings file, at the bottom of its detail pane. The panel
+ * never guesses: the fields come from the definition the route knows for this
+ * package, and the scope switch chooses which of the two files is edited,
+ * showing that file's values rather than the merged result it would otherwise
+ * write back.
+ */
+function PluginConfigForm({
+  config,
+  initialScope,
+  projectResourcesLoaded,
+  saving,
+  error,
+  message,
+  onSave,
+}: {
+  config: PluginConfigInfo;
+  initialScope: PluginScope;
+  projectResourcesLoaded: boolean;
+  saving: boolean;
+  error: string | null;
+  message: string | null;
+  onSave: (scope: PluginScope, values: Record<string, PluginConfigValue>) => void;
+}) {
+  const { t } = useI18n();
+  const id = useId();
+  const [scope, setScope] = useState<PluginScope>(initialScope);
+  const [draft, setDraft] = useState<ConfigDraft>(() => draftFromScope(config.scopes[initialScope]));
+
+  // A save replaces the values the form was built from, and switching the file
+  // starts from that file's own values, never from the other one's unsaved ones.
+  useEffect(() => {
+    setDraft(draftFromScope(config.scopes[scope]));
+  }, [config, scope]);
+
+  const file = config.scopes[scope];
+  const { values, invalid } = submittedConfig(file.fields, draft);
+  const overridden = scope === "global" && config.scopes.project.fields.some((field) => field.set);
+  const saveDisabled = saving || Boolean(file.error) || invalid.size > 0;
+
+  return (
+    <div className="plugin-config">
+      <ConfigSectionTitle>{t("plugins.config.title")}</ConfigSectionTitle>
+      <ConfigSaveTarget
+        value={scope}
+        label={t("config.saveTo")}
+        options={[
+          { value: "global", label: scopeLabel("global", t) },
+          { value: "project", label: scopeLabel("project", t), disabled: !projectResourcesLoaded },
+        ]}
+        path={shortenPath(file.path)}
+        disabledReason={t("plugins.config.projectUntrusted")}
+        onChange={setScope}
+      />
+      {overridden && <p className="plugin-config-note">{t("plugins.config.projectOverrides")}</p>}
+      {file.error && <div className="plugin-config-error">{file.error}</div>}
+      <div className="plugin-config-fields">
+        {file.fields.map((field) => {
+          const controlId = `${id}-${field.key}`;
+          const label = t(field.labelKey);
+          const description = field.descriptionKey ? t(field.descriptionKey) : null;
+          const descriptionId = `${controlId}-description`;
+          if (field.kind === "boolean") {
+            return (
+              <div key={field.key} className="plugin-config-field">
+                <div className="plugin-config-row">
+                  <div className="plugin-config-text">
+                    <span className="plugin-config-name">{label}</span>
+                    {description && (
+                      <p id={descriptionId} className="plugin-config-description">{description}</p>
+                    )}
+                  </div>
+                  <ConfigSwitch
+                    checked={draft[field.key] === true}
+                    label={label}
+                    describedBy={description ? descriptionId : undefined}
+                    onChange={(checked) => setDraft((current) => ({ ...current, [field.key]: checked }))}
+                  />
+                </div>
+              </div>
+            );
+          }
+          const raw = draft[field.key];
+          const text = typeof raw === "string" ? raw : String(raw);
+          const bad = invalid.has(field.key);
+          const hintId = `${controlId}-hint`;
+          const set = (value: string) => setDraft((current) => ({ ...current, [field.key]: value }));
+          return (
+            <div key={field.key} className="plugin-config-field">
+              <div className="plugin-config-row">
+                <label htmlFor={controlId} className="plugin-config-name">{label}</label>
+                {field.control === "slider" && (
+                  <output htmlFor={controlId} className="plugin-config-value">
+                    {text}{field.unit ? ` ${field.unit}` : ""}
+                  </output>
+                )}
+              </div>
+              {field.control === "slider" ? (
+                <input
+                  id={controlId}
+                  type="range"
+                  min={field.min}
+                  max={field.max}
+                  step={1}
+                  value={text}
+                  aria-describedby={description ? descriptionId : undefined}
+                  onChange={(event) => set(event.target.value)}
+                />
+              ) : (
+                <div className="plugin-config-number-row">
+                  <input
+                    id={controlId}
+                    type="number"
+                    className="plugin-config-number"
+                    min={field.min}
+                    max={field.max}
+                    step={1}
+                    value={text}
+                    aria-invalid={bad || undefined}
+                    aria-describedby={bad ? hintId : description ? descriptionId : undefined}
+                    onChange={(event) => set(event.target.value)}
+                  />
+                  {field.unit && <span className="plugin-config-unit">{field.unit}</span>}
+                </div>
+              )}
+              {bad ? (
+                <p id={hintId} className="plugin-config-hint">
+                  {t("plugins.config.invalidRange", { min: field.min ?? 0, max: field.max ?? 0 })}
+                </p>
+              ) : description ? (
+                <p id={descriptionId} className="plugin-config-description">{description}</p>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      <div className="plugin-config-actions">
+        <ConfigButton
+          variant="primary"
+          size="small"
+          disabled={saveDisabled}
+          onClick={() => onSave(scope, values)}
+        >
+          {saving ? t("i18n.saving") : t("i18n.save")}
+        </ConfigButton>
+        <ConfigButton
+          size="small"
+          disabled={saving || Boolean(file.error)}
+          onClick={() => setDraft(draftFromDefaults(file.fields))}
+        >
+          {t("plugins.config.reset")}
+        </ConfigButton>
+      </div>
+      {message && <div className="plugin-config-message">{message}</div>}
+      {error && <div className="plugin-config-error">{error}</div>}
+    </div>
+  );
 }
 
 function ResourceList({ pkg }: { pkg: PluginPackageInfo }) {
@@ -328,12 +546,17 @@ function PackageDetail({
   actionError,
   actionMessage,
   sessionId,
+  projectResourcesLoaded,
   updateStatus,
   checkingUpdate,
   updateError,
+  configSaving,
+  configError,
+  configMessage,
   onAction,
   onCheckUpdate,
   onReloadSession,
+  onSaveConfig,
 }: {
   pkg: PluginPackageInfo;
   cwd: string;
@@ -341,12 +564,17 @@ function PackageDetail({
   actionError: string | null;
   actionMessage: string | null;
   sessionId: string | null;
+  projectResourcesLoaded: boolean;
   updateStatus?: PluginUpdateResult;
   checkingUpdate: boolean;
   updateError: string | null;
+  configSaving: boolean;
+  configError: string | null;
+  configMessage: string | null;
   onAction: (action: PluginAction, pkg: PluginPackageInfo) => void;
   onCheckUpdate: () => void;
   onReloadSession: () => void;
+  onSaveConfig: (scope: PluginScope, values: Record<string, PluginConfigValue>) => void;
 }) {
   const { t } = useI18n();
   const key = packageKey(pkg);
@@ -517,6 +745,18 @@ function PackageDetail({
         </div>
       )}
 
+      {pkg.config && (
+        <PluginConfigForm
+          config={pkg.config}
+          initialScope={pkg.scope}
+          projectResourcesLoaded={projectResourcesLoaded}
+          saving={configSaving}
+          error={configError}
+          message={configMessage}
+          onSave={onSaveConfig}
+        />
+      )}
+
       {actionMessage && (
         <div style={{ fontSize: 12, color: "#16a34a" }}>
           {actionMessage}
@@ -593,6 +833,11 @@ export function PluginsConfig({
   const [checkingAll, setCheckingAll] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updatingAll, setUpdatingAll] = useState(false);
+  // A plugin's own settings file: which package's form is writing, and what the
+  // last save or its refusal said.
+  const [configBusyKey, setConfigBusyKey] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [configMessage, setConfigMessage] = useState<string | null>(null);
 
   const packages = useMemo(() => data?.packages ?? [], [data?.packages]);
   const standaloneExtensions = useMemo(() => data?.standaloneExtensions ?? [], [data?.standaloneExtensions]);
@@ -656,6 +901,12 @@ export function PluginsConfig({
   useEffect(() => {
     if (selected) setLastSettingsSelection("plugins", selected, cwd);
   }, [cwd, selected]);
+
+  // A save's result belongs to the package it was made for.
+  useEffect(() => {
+    setConfigError(null);
+    setConfigMessage(null);
+  }, [selected]);
 
   const checkForUpdates = useCallback(async (pkg?: PluginPackageInfo) => {
     const targets = pkg ? [pkg] : packages.filter((item) => item.canCheckForUpdates);
@@ -860,6 +1111,38 @@ export function PluginsConfig({
     }
   }, [cwd, installScope, installSource, t]);
 
+  const saveConfig = useCallback(async (
+    pkg: PluginPackageInfo,
+    scope: PluginScope,
+    values: Record<string, PluginConfigValue>,
+  ) => {
+    setConfigBusyKey(packageKey(pkg));
+    setConfigError(null);
+    setConfigMessage(null);
+    try {
+      const res = await fetch("/api/plugins", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "set-config",
+          source: pkg.source,
+          scope: pkg.scope,
+          configScope: scope,
+          values,
+          cwd,
+        }),
+      });
+      const next = (await res.json()) as PluginsResponse & { error?: string };
+      if (!res.ok || next.error) throw new Error(next.error ?? `HTTP ${res.status}`);
+      setData(next);
+      setConfigMessage(t("plugins.config.saved"));
+    } catch (err) {
+      setConfigError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setConfigBusyKey(null);
+    }
+  }, [cwd, t]);
+
   const reloadSession = useCallback(async () => {
     if (!sessionId) return;
     setBusyKey("reload");
@@ -883,7 +1166,7 @@ export function PluginsConfig({
     (status) => status.state === "update-available",
   ).length;
   const hasCheckablePackages = packages.some((pkg) => pkg.canCheckForUpdates);
-  const footerBusy = loading || busyKey !== null || checkingUpdates.size > 0 || updatingAll;
+  const footerBusy = loading || busyKey !== null || checkingUpdates.size > 0 || updatingAll || configBusyKey !== null;
 
   return (
     <ConfigPanelShell embedded={embedded} title={t("common.plugins")} subtitle={shortenPath(cwd)} closeLabel={t("i18n.close")} onClose={onClose}>
@@ -1025,12 +1308,17 @@ export function PluginsConfig({
                 actionError={actionError}
                 actionMessage={actionMessage}
                 sessionId={sessionId}
+                projectResourcesLoaded={projectResourcesLoaded}
                 updateStatus={updateStatuses[packageKey(selectedPackage)]}
                 checkingUpdate={checkingUpdates.has(packageKey(selectedPackage))}
                 updateError={updateError}
+                configSaving={configBusyKey === packageKey(selectedPackage)}
+                configError={configError}
+                configMessage={configMessage}
                 onAction={runAction}
                 onCheckUpdate={() => void checkForUpdates(selectedPackage)}
                 onReloadSession={reloadSession}
+                onSaveConfig={(scope, values) => void saveConfig(selectedPackage, scope, values)}
               />
               ) : (
                 <ConfigEmptyState>{t("i18n.selectPackage")}</ConfigEmptyState>
