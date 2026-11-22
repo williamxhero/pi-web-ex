@@ -204,6 +204,60 @@ test("enabling keeps an entry's own settings such as autoload", async () => {  c
   assert.deepEqual(await readPackages(), [{ source: alpha, autoload: false }, { source: beta, autoload: false }]);
 });
 
+test("a standalone extension gets its descriptor and is written through the extension target", async () => {
+  const pluginFile = join(agentDir, "extensions", "loop-to-done.ts");
+  const configPath = join(agentDir, "loop-to-done.json");
+  const brokenFile = join(agentDir, "extensions", "broken-ext.ts");
+  const brokenDescriptor = join(agentDir, "plugin-configs", "broken-ext.json");
+  await writeFile(pluginFile, "export default () => {};\n");
+  await writeFile(brokenFile, "export default () => {};\n");
+  await mkdir(join(agentDir, "plugin-configs"), { recursive: true });
+  await writeFile(brokenDescriptor, JSON.stringify({ fields: [] }));
+
+  const listed = await (await GET(new Request(`http://localhost/api/plugins?cwd=${encodeURIComponent(cwd)}`))).json();
+  const extension = listed.standaloneExtensions.find((item) => item.name === "loop-to-done");
+  assert.ok(extension, "the loose extension is listed");
+  assert.equal(extension.config.origin, "bundled");
+  assert.equal(extension.config.layers.global.path, configPath);
+  assert.equal(extension.config.layers.global.fields.find((field) => field.key === "autoStart").value, false);
+  // A descriptor that does not validate leaves the row without a form and says why.
+  const broken = listed.standaloneExtensions.find((item) => item.name === "broken-ext");
+  assert.equal(broken.config, undefined);
+  assert.ok(listed.diagnostics.some((entry) => entry.source === "broken-ext" && /storage/.test(entry.message)));
+
+  const saved = await postPlugins({
+    action: "set-config",
+    extension: "loop-to-done",
+    configScope: "global",
+    values: { autoStart: true, maxTokens: 1200 },
+  });
+  const body = await saved.json();
+  assert.equal(saved.status, 200);
+  assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), { autoStart: true, maxTokens: 1200 });
+  const after = body.standaloneExtensions.find((item) => item.name === "loop-to-done");
+  assert.deepEqual(
+    after.config.layers.global.fields.filter((field) => field.set).map((field) => field.key).sort(),
+    ["autoStart", "maxTokens"],
+  );
+
+  // Exactly one target is required: a package source or an extension name.
+  const both = await postPlugins({
+    action: "set-config",
+    source: "npm:pi-image-slim",
+    extension: "loop-to-done",
+    configScope: "global",
+    values: { quality: 10 },
+  });
+  assert.equal(both.status, 400);
+  const neither = await postPlugins({ action: "set-config", configScope: "global", values: { quality: 10 } });
+  assert.equal(neither.status, 400);
+
+  await rm(pluginFile, { force: true });
+  await rm(brokenFile, { force: true });
+  await rm(brokenDescriptor, { force: true });
+  await rm(configPath, { force: true });
+});
+
 test("a described plugin's settings are listed per layer and written through set-config", async () => {
   await writeFile(settingsPath, JSON.stringify({ packages: ["npm:pi-image-slim"] }));
   const configPath = join(agentDir, "pi-image-slim.json");

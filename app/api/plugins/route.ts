@@ -323,7 +323,26 @@ function collectResource(
   resourcesByPackage.set(key, resources);
 }
 
-function collectResources(paths: ResolvedPaths): {
+/**
+ * A standalone extension's own descriptor folder: a folder extension keeps
+ * `pi.config.json` beside the file pi loads, so the name of the folder has to
+ * match the name pi reports for the extension. A single `.ts` file sits
+ * directly in `extensions/`, which is a shared folder and not the extension's.
+ */
+function extensionFolder(path: string, name: string): string | undefined {
+  try {
+    if (statSync(path).isDirectory()) return path;
+  } catch {
+    return undefined;
+  }
+  const folder = dirname(path);
+  return basename(folder) === name ? folder : undefined;
+}
+
+function collectResources(
+  paths: ResolvedPaths,
+  context: { agentDir: string; cwd: string; diagnostics: PluginDiagnostic[] },
+): {
   countsByPackage: Map<string, PluginResourceCounts>;
   resourcesByPackage: Map<string, PluginResourceInfo[]>;
   standaloneExtensions: PluginStandaloneExtensionInfo[];
@@ -338,12 +357,35 @@ function collectResources(paths: ResolvedPaths): {
   for (const resource of paths.themes) collectResource(resource, "themes", countsByPackage, resourcesByPackage, totals);
   const standaloneExtensions = paths.extensions
     .filter((resource) => resource.metadata.origin === "top-level")
-    .map((resource): PluginStandaloneExtensionInfo => ({
-      ...toResourceInfo(resource, "extension"),
-      kind: "extension",
-      scope: toPluginScope(resource.metadata.scope),
-      enabled: resource.enabled,
-    }));
+    .map((resource): PluginStandaloneExtensionInfo => {
+      const info = toResourceInfo(resource, "extension");
+      // Same descriptor mechanism as a package, keyed by the name pi reports:
+      // the extension's own folder, then the user's copy, then the shipped one.
+      const found = findPluginConfigDescriptor({
+        name: info.name,
+        packageDir: extensionFolder(info.path, info.name),
+        agentDir: context.agentDir,
+        bundledDir: bundledPluginConfigDir(),
+      });
+      if (found.error) {
+        context.diagnostics.push({ type: "warning", source: info.name, message: found.error });
+      }
+      return {
+        ...info,
+        kind: "extension",
+        scope: toPluginScope(resource.metadata.scope),
+        enabled: resource.enabled,
+        ...(found.descriptor && found.origin
+          ? {
+            config: readPluginConfig(
+              found.descriptor,
+              { agentDir: context.agentDir, cwd: context.cwd, configDir: CONFIG_DIR_NAME },
+              found.origin,
+            ),
+          }
+          : {}),
+      };
+    });
   totals.extensions += standaloneExtensions.filter((extension) => extension.enabled).length;
   return { countsByPackage, resourcesByPackage, standaloneExtensions, totals };
 }
@@ -376,7 +418,11 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
       });
       return "skip";
     });
-    ({ countsByPackage, resourcesByPackage, standaloneExtensions, totals } = collectResources(resolved));
+    ({ countsByPackage, resourcesByPackage, standaloneExtensions, totals } = collectResources(resolved, {
+      agentDir,
+      cwd,
+      diagnostics,
+    }));
   } catch (error) {
     diagnostics.push({
       type: "error",
@@ -394,7 +440,8 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
     const packageMetadata = readPackageMetadata(pkg.installedPath);
     // Only a plugin Pi Web has a descriptor for gets a form: its own
     // `pi.config.json`, the user's copy, or the one shipped here.
-    const descriptor = findPluginConfigDescriptor(pkg.source, {
+    const descriptor = findPluginConfigDescriptor({
+      source: pkg.source,
       packageDir: packageDirectory(pkg.installedPath),
       agentDir,
       bundledDir: bundledPluginConfigDir(),
@@ -468,11 +515,13 @@ export async function GET(req: Request) {
  * A plugin's settings, written by the Plugins detail pane's form. The keys come
  * from the descriptor the panel rendered, so a stale page cannot write a key
  * the plugin would ignore; the route resolves the descriptor itself rather than
- * trusting the page's copy.
+ * trusting the page's copy. `source` names a package and `extension` a
+ * standalone extension; exactly one of them is given.
  */
 async function setPluginConfig(
   body: {
     source?: string;
+    extension?: string;
     configScope?: unknown;
     values?: unknown;
     remove?: unknown;
@@ -481,11 +530,18 @@ async function setPluginConfig(
   context: {
     agentDir: string;
     projectTrusted: boolean;
-    installedPath?: string;
+    /** The package folder, or the folder a folder extension lives in. */
+    packageDir?: string;
   },
 ): Promise<Response> {
   const source = body.source?.trim();
-  if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
+  const extension = body.extension?.trim();
+  if ((source ? 1 : 0) + (extension ? 1 : 0) !== 1) {
+    return NextResponse.json(
+      { error: "Give exactly one of source (a package) or extension (a standalone extension)" },
+      { status: 400 },
+    );
+  }
   const configScope = readScope(body.configScope);
   if (configScope === "project" && !context.projectTrusted) {
     return NextResponse.json(
@@ -493,14 +549,19 @@ async function setPluginConfig(
       { status: 403 },
     );
   }
-  const found = findPluginConfigDescriptor(source, {
-    packageDir: packageDirectory(context.installedPath),
+  const found = findPluginConfigDescriptor({
+    ...(source ? { source } : {}),
+    ...(extension ? { name: extension } : {}),
+    packageDir: context.packageDir,
     agentDir: context.agentDir,
     bundledDir: bundledPluginConfigDir(),
   });
   if (found.error) return NextResponse.json({ error: found.error }, { status: 400 });
   if (!found.descriptor) {
-    return NextResponse.json({ error: `No settings descriptor is known for ${source}` }, { status: 400 });
+    return NextResponse.json(
+      { error: `No settings descriptor is known for ${source ?? extension}` },
+      { status: 400 },
+    );
   }
   if (!found.descriptor.storage.locations.includes(configScope)) {
     return NextResponse.json(
@@ -524,6 +585,18 @@ async function setPluginConfig(
   return NextResponse.json(await readPlugins(body.cwd));
 }
 
+/** Where a folder extension named `name` sits, in either extension root. */
+function extensionDirectory(name: string, cwd: string, agentDir: string): string | undefined {
+  for (const dir of [join(agentDir, "extensions", name), join(cwd, CONFIG_DIR_NAME, "extensions", name)]) {
+    try {
+      if (statSync(dir).isDirectory()) return dir;
+    } catch {
+      // Not there: try the next root.
+    }
+  }
+  return undefined;
+}
+
 // POST /api/plugins body: { action, source?, scope?, cwd }
 // enable/disable also take { packages: [{ source, scope }] } in place of
 // source/scope and add per-package `results` to the response.
@@ -539,6 +612,7 @@ export async function POST(req: Request) {
     const body = await req.json() as {
       action?: PluginAction;
       source?: string;
+      extension?: string;
       scope?: PluginScope;
       packages?: unknown;
       configScope?: unknown;
@@ -566,12 +640,17 @@ export async function POST(req: Request) {
       const cwd = body.cwd;
       const packageScope = readScope(body.scope);
       const configured = new DefaultPackageManager({ cwd, agentDir, settingsManager }).listConfiguredPackages();
-      const entry = configured.find((pkg) => pkg.source === body.source && toPluginScope(pkg.scope) === packageScope)
-        ?? configured.find((pkg) => pkg.source === body.source);
+      const entry = body.source
+        ? configured.find((pkg) => pkg.source === body.source && toPluginScope(pkg.scope) === packageScope)
+          ?? configured.find((pkg) => pkg.source === body.source)
+        : undefined;
+      const extension = body.extension?.trim();
       return await setPluginConfig({ ...body, cwd }, {
         agentDir,
         projectTrusted: projectTrust.trusted,
-        installedPath: entry?.installedPath,
+        packageDir: extension
+          ? extensionDirectory(extension, cwd, agentDir)
+          : packageDirectory(entry?.installedPath),
       });
     }
 

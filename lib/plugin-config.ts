@@ -73,42 +73,44 @@ function readJsonObject(path: string): { object: Record<string, unknown>; error?
 /**
  * The name a descriptor is looked up by: an npm source already carries one,
  * while a git checkout or a local folder carries it in its own package.json.
+ * A standalone extension is looked up by the name pi reports for it.
  */
-function descriptorName(source: string, packageDir: string | undefined): string | undefined {
-  const npm = parseNpmSource(source)?.name;
+function descriptorName(lookup: DescriptorLookup): string | undefined {
+  const npm = lookup.source ? parseNpmSource(lookup.source)?.name : undefined;
   if (npm) return npm;
-  if (!packageDir) return undefined;
-  const manifest = readJsonObject(join(packageDir, "package.json"));
+  if (lookup.name) return lookup.name;
+  if (!lookup.packageDir) return undefined;
+  const manifest = readJsonObject(join(lookup.packageDir, "package.json"));
   if (manifest.error) return undefined;
   const name = manifest.object.name;
   return typeof name === "string" && name.trim() && !/[\\/]/.test(name) ? name.trim() : undefined;
 }
 
 /** Every path a descriptor may be read from, most authoritative first. */
-function descriptorCandidates(
-  source: string,
-  paths: { packageDir?: string; agentDir: string; bundledDir: string },
-): { origin: DescriptorOrigin; path: string }[] {
-  const name = descriptorName(source, paths.packageDir);
+function descriptorCandidates(lookup: DescriptorLookup): { origin: DescriptorOrigin; path: string }[] {
+  const name = descriptorName(lookup);
   if (!name) return [];
   const candidates: { origin: DescriptorOrigin; path: string }[] = [];
-  if (paths.packageDir) candidates.push({ origin: "package", path: join(paths.packageDir, "pi.config.json") });
-  candidates.push({ origin: "user", path: join(paths.agentDir, "plugin-configs", `${name}.json`) });
-  candidates.push({ origin: "bundled", path: join(paths.bundledDir, `${name}.json`) });
+  if (lookup.packageDir) {
+    candidates.push({ origin: "package", path: join(lookup.packageDir, "pi.config.json") });
+  }
+  candidates.push({ origin: "user", path: join(lookup.agentDir, "plugin-configs", `${name}.json`) });
+  candidates.push({ origin: "bundled", path: join(lookup.bundledDir, `${name}.json`) });
   return candidates;
 }
 
 /**
- * The descriptor for a configured package: the plugin's own `pi.config.json`,
- * then the user's copy in the agent dir, then the one Pi Web ships. A file that
- * exists but does not validate stops the search and is reported — falling
- * through to a different copy would show a form that writes other keys.
+ * The descriptor for a configured package or a standalone extension: the
+ * plugin's own `pi.config.json` (a package folder, or the folder a folder
+ * extension lives in), then the user's copy in the agent dir, then the one Pi
+ * Web ships. A file that exists but does not validate stops the search and is
+ * reported — falling through to a different copy would show a form that writes
+ * other keys.
  */
 export function findPluginConfigDescriptor(
-  source: string,
-  paths: { packageDir?: string; agentDir: string; bundledDir: string },
+  lookup: DescriptorLookup,
 ): { descriptor?: PluginConfigDescriptor; origin?: DescriptorOrigin; path?: string; error?: string } {
-  for (const candidate of descriptorCandidates(source, paths)) {
+  for (const candidate of descriptorCandidates(lookup)) {
     if (!existsSync(candidate.path)) continue;
     const { object, error } = readJsonObject(candidate.path);
     if (error) return { error };
@@ -117,6 +119,17 @@ export function findPluginConfigDescriptor(
     return { descriptor: parsed.descriptor, origin: candidate.origin, path: candidate.path };
   }
   return {};
+}
+
+export interface DescriptorLookup {
+  /** A configured package's source (`npm:…`, `git:…`, a directory). */
+  source?: string;
+  /** A standalone extension's name, which is its file or folder basename. */
+  name?: string;
+  /** The installed package folder, or the folder a folder extension lives in. */
+  packageDir?: string;
+  agentDir: string;
+  bundledDir: string;
 }
 
 /** The dotted path of a key, read out of a layer's object. */

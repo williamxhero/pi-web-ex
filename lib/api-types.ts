@@ -852,6 +852,8 @@ export interface PluginStandaloneExtensionInfo extends PluginResourceInfo {
   kind: "extension";
   scope: PluginScope;
   enabled: boolean;
+  /** Present when Pi Web has a descriptor for this extension's name. */
+  config?: PluginConfigInfo;
 }
 
 export type PluginUpdateState =

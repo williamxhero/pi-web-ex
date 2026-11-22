@@ -936,7 +936,24 @@ function PackageDetail({
   );
 }
 
-function StandaloneExtensionDetail({ extension }: { extension: PluginStandaloneExtensionInfo }) {
+function StandaloneExtensionDetail({
+  extension,
+  projectResourcesLoaded,
+  configSaving,
+  configError,
+  configMessage,
+  onSaveConfig,
+}: {
+  extension: PluginStandaloneExtensionInfo;
+  projectResourcesLoaded: boolean;
+  configSaving: boolean;
+  configError: string | null;
+  configMessage: string | null;
+  onSaveConfig: (
+    scope: PluginScope,
+    changes: { values: Record<string, PluginConfigValue>; remove: string[] },
+  ) => void;
+}) {
   const { t } = useI18n();
   const status = extension.enabled ? "loaded" : "disabled";
 
@@ -960,6 +977,17 @@ function StandaloneExtensionDetail({ extension }: { extension: PluginStandaloneE
           {shortenPath(extension.path)}
         </ConfigDetailGridRow>
       </ConfigDetailGrid>
+      {extension.config && (
+        <PluginConfigForm
+          config={extension.config}
+          initialScope={extension.scope}
+          projectResourcesLoaded={projectResourcesLoaded}
+          saving={configSaving}
+          error={configError}
+          message={configMessage}
+          onSave={onSaveConfig}
+        />
+      )}
     </ConfigDetailStack>
   );
 }
@@ -1277,11 +1305,11 @@ export function PluginsConfig({
   }, [cwd, installScope, installSource, t]);
 
   const saveConfig = useCallback(async (
-    pkg: PluginPackageInfo,
+    target: { key: string; scope: PluginScope; source?: string; extension?: string },
     scope: PluginScope,
     changes: { values: Record<string, PluginConfigValue>; remove: string[] },
   ) => {
-    setConfigBusyKey(packageKey(pkg));
+    setConfigBusyKey(target.key);
     setConfigError(null);
     setConfigMessage(null);
     try {
@@ -1290,8 +1318,9 @@ export function PluginsConfig({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "set-config",
-          source: pkg.source,
-          scope: pkg.scope,
+          ...(target.source ? { source: target.source } : {}),
+          ...(target.extension ? { extension: target.extension } : {}),
+          scope: target.scope,
           configScope: scope,
           values: changes.values,
           remove: changes.remove,
@@ -1464,7 +1493,18 @@ export function PluginsConfig({
                 onInstall={installPlugin}
               />
             ) : loading ? null : selectedExtension ? (
-              <StandaloneExtensionDetail extension={selectedExtension} />
+              <StandaloneExtensionDetail
+                extension={selectedExtension}
+                projectResourcesLoaded={projectResourcesLoaded}
+                configSaving={configBusyKey === extensionKey(selectedExtension)}
+                configError={configError}
+                configMessage={configMessage}
+                onSaveConfig={(scope, changes) => void saveConfig({
+                  key: extensionKey(selectedExtension),
+                  scope: selectedExtension.scope,
+                  extension: selectedExtension.name,
+                }, scope, changes)}
+              />
             ) : selectedPackage ? (
               <PackageDetail
                 key={packageKey(selectedPackage)}
@@ -1484,7 +1524,11 @@ export function PluginsConfig({
                 onAction={runAction}
                 onCheckUpdate={() => void checkForUpdates(selectedPackage)}
                 onReloadSession={reloadSession}
-                onSaveConfig={(scope, changes) => void saveConfig(selectedPackage, scope, changes)}
+                onSaveConfig={(scope, changes) => void saveConfig({
+                  key: packageKey(selectedPackage),
+                  scope: selectedPackage.scope,
+                  source: selectedPackage.source,
+                }, scope, changes)}
               />
               ) : (
                 <ConfigEmptyState>{t("i18n.selectPackage")}</ConfigEmptyState>

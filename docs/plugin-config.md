@@ -2,21 +2,30 @@
 
 Pi Web 的「设置 › 插件」为插件自己读的配置画一张表单。表单不是写死的：它由一个**描述文件**决定，描述文件声明「值存在哪里」和「每个键的类型、默认值、说明」。
 
+## 覆盖谁
+
+两处都会出表单，判断标准相同：**有描述就显示，没有就不显示**。
+
+| | 名字从哪来 | 插件自己的描述文件 |
+| --- | --- | --- |
+| 包（npm / git / 本地目录） | `npm:<name>`，或它自己 `package.json` 的 `name` | `<包目录>/pi.config.json` |
+| 散装扩展（`<agent 目录>/extensions/` 或 `<项目>/.pi/extensions/` 里的文件或文件夹） | pi 给它的名字，即文件基名或文件夹名 | 文件夹形式：`<扩展文件夹>/pi.config.json`；单个 `.ts` 没有自己的文件夹 |
+
 ## 描述文件放在哪
 
 按优先级从高到低查找，命中第一个就停止：
 
 | 顺序 | 路径 | 谁维护 |
 | --- | --- | --- |
-| 1 | `<插件包目录>/pi.config.json` | 插件作者（随版本发布） |
-| 2 | `~/.pi/agent/plugin-configs/<npm 包名>.json` | 你 |
-| 3 | `<Pi Web 安装目录>/plugin-configs/<npm 包名>.json` | Pi Web 自带的第三方配置库 |
+| 1 | 插件自己的 `pi.config.json` | 插件作者（随版本或随扩展分发） |
+| 2 | `~/.pi/agent/plugin-configs/<名字>.json` | 你 |
+| 3 | `<Pi Web 安装目录>/plugin-configs/<名字>.json` | Pi Web 自带的第三方配置库 |
 
-- 对**已配置的插件包**生效（npm、git、本地目录都行）。包名取自 `npm:<name>`；git 源和本地目录读它自己 `package.json` 的 `name`——没有 manifest 就找不到名字，也就不会有表单。
+- 名字对包和散装扩展是同一个命名空间：同名即同一扩展的两种装法，共用一份描述。
 - 找到但解析失败的文件会**中止**查找并在页脚报一条诊断（文件名 + 原因），不会悄悄退到下一层去写别的键。
 - 描述文件本身只决定「画什么、写哪里」，不会被执行。
 
-Pi Web 自带三个：`pi-image-slim`、`pi-condense`、`visual-explainer`。
+Pi Web 自带四个：`pi-image-slim`、`pi-condense`、`visual-explainer`、`loop-to-done`（最后者的扩展本体在 `williamxhero/pi-extension` 仓库，以单个文件装进 `extensions/`）。
 
 ## 描述文件长什么样
 
@@ -84,7 +93,7 @@ Pi Web 自带三个：`pi-image-slim`、`pi-condense`、`visual-explainer`。
 ## 加一个插件
 
 1. 找到插件**真正读取**的配置位置（它的 README / 源码里的 `readFileSync`、`getSettings()`）。
-2. 在 `plugin-configs/<npm 包名>.json` 写一份描述（或放进插件包里做 `pi.config.json`）。
-3. 打开「设置 › 插件」，选中它，表单就在「已解析资源」下面。
+2. 在 `plugin-configs/<名字>.json` 写一份描述（或放进插件包里做 `pi.config.json`；文件夹形式的散装扩展放在扩展自己的文件夹里）。
+3. 打开「设置 › 插件」，选中它，表单就在详情页里（包在「已解析资源」下面，散装扩展在状态与路径下面）。
 
 插件没有描述文件时不会显示表单——Pi Web 不会去猜一个它不认识的格式。
