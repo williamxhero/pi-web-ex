@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +17,7 @@ await writeFile(join(agentDir, "extensions", "rtk.ts"), "export default () => {}
 
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() } });
 const { allowFileRoot } = await jiti.import("../../../lib/file-access.ts");
+const { trustProject } = await jiti.import("../../../lib/project-trust.ts");
 const { GET, POST } = await jiti.import("./route.ts");
 allowFileRoot(cwd);
 
@@ -326,4 +328,109 @@ test("a described plugin's settings are listed per layer and written through set
 
   await writeFile(settingsPath, JSON.stringify({ packages: [] }));
   await rm(configPath, { force: true });
+});
+
+test("a project-scoped standalone extension inherits the global layer and writes its own", async () => {
+  const project = join(root, "extension-project");
+  const extensionDir = join(project, ".pi", "extensions", "loop-to-done");
+  await mkdir(extensionDir, { recursive: true });
+  await writeFile(join(extensionDir, "index.ts"), "export default () => {};\n");
+  allowFileRoot(project);
+  // A project `.pi/extensions` folder is exactly what needs a trust decision.
+  trustProject(project, agentDir);
+
+  const globalPath = join(agentDir, "loop-to-done.json");
+  const projectPath = join(project, ".pi", "loop-to-done.json");
+  assert.equal((await postPlugins({
+    action: "set-config",
+    extension: "loop-to-done",
+    configScope: "global",
+    values: { autoStart: true },
+  }, project)).status, 200);
+
+  const listed = await (await GET(new Request(`http://localhost/api/plugins?cwd=${encodeURIComponent(project)}`))).json();
+  const extension = listed.standaloneExtensions.find((item) => item.name === "loop-to-done");
+  assert.ok(extension, "the project extension is listed once the project is trusted");
+  assert.equal(extension.scope, "project");
+  assert.equal(extension.config.layers.global.path, globalPath);
+  assert.equal(extension.config.layers.project.path, projectPath);
+  const inherited = extension.config.layers.project.fields.find((field) => field.key === "autoStart");
+  assert.deepEqual(
+    { value: inherited.value, from: inherited.from, set: inherited.set },
+    { value: true, from: "global", set: false },
+  );
+
+  const saved = await postPlugins({
+    action: "set-config",
+    extension: "loop-to-done",
+    configScope: "project",
+    values: { maxTokens: 900 },
+  }, project);
+  assert.equal(saved.status, 200);
+  assert.deepEqual(JSON.parse(await readFile(projectPath, "utf8")), { maxTokens: 900 });
+  const after = (await saved.json()).standaloneExtensions.find((item) => item.name === "loop-to-done");
+  const own = after.config.layers.project.fields.find((field) => field.key === "maxTokens");
+  assert.deepEqual({ value: own.value, from: own.from, set: own.set }, { value: 900, from: "project", set: true });
+  // The key the project leaves alone still follows the global layer.
+  assert.equal(after.config.layers.project.fields.find((field) => field.key === "autoStart").from, "global");
+
+  await rm(project, { recursive: true, force: true });
+  await rm(globalPath, { force: true });
+});
+
+test("an untrusted project's standalone extension gets no form and no project write", async () => {
+  const untrusted = join(root, "untrusted-extension-project");
+  await mkdir(join(untrusted, ".pi", "extensions", "loop-to-done"), { recursive: true });
+  await writeFile(join(untrusted, ".pi", "extensions", "loop-to-done", "index.ts"), "export default () => {};\n");
+  allowFileRoot(untrusted);
+
+  const listed = await (await GET(new Request(`http://localhost/api/plugins?cwd=${encodeURIComponent(untrusted)}`))).json();
+  assert.equal(listed.projectResourcesLoaded, false);
+  assert.equal(listed.standaloneExtensions.some((item) => item.name === "loop-to-done"), false);
+
+  const refused = await postPlugins({
+    action: "set-config",
+    extension: "loop-to-done",
+    configScope: "project",
+    values: { autoStart: true },
+  }, untrusted);
+  assert.equal(refused.status, 403);
+  assert.match((await refused.json()).error, /trusted/);
+  assert.equal(existsSync(join(untrusted, ".pi", "loop-to-done.json")), false);
+
+  await rm(untrusted, { recursive: true, force: true });
+});
+
+test("a folder extension's own descriptor writes the project settings namespace", async () => {
+  const project = join(root, "settings-namespace-project");
+  const extensionDir = join(project, ".pi", "extensions", "settings-ext");
+  await mkdir(extensionDir, { recursive: true });
+  await writeFile(join(extensionDir, "index.ts"), "export default () => {};\n");
+  await writeFile(join(extensionDir, "pi.config.json"), JSON.stringify({
+    storage: { type: "settings", namespace: "settingsExt", locations: ["global", "project"] },
+    fields: [{ key: "enabled", type: "boolean", default: false, label: { en: "Enabled" } }],
+  }));
+  allowFileRoot(project);
+  trustProject(project, agentDir);
+
+  const listed = await (await GET(new Request(`http://localhost/api/plugins?cwd=${encodeURIComponent(project)}`))).json();
+  const extension = listed.standaloneExtensions.find((item) => item.name === "settings-ext");
+  assert.ok(extension, "the folder extension is listed");
+  assert.equal(extension.config.origin, "package");
+  assert.deepEqual(extension.config.storage, { type: "settings", namespace: "settingsExt" });
+  assert.equal(extension.config.layers.global.path, join(agentDir, "settings.json"));
+  assert.equal(extension.config.layers.project.path, join(project, ".pi", "settings.json"));
+
+  const saved = await postPlugins({
+    action: "set-config",
+    extension: "settings-ext",
+    configScope: "project",
+    values: { enabled: true },
+  }, project);
+  assert.equal(saved.status, 200);
+  assert.deepEqual(JSON.parse(await readFile(join(project, ".pi", "settings.json"), "utf8")), {
+    settingsExt: { enabled: true },
+  });
+
+  await rm(project, { recursive: true, force: true });
 });
