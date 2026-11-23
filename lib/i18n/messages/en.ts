@@ -93,6 +93,8 @@ export const enLocale: LocalePlugin = {
     "skills.instructions": "Instructions",
     "skills.noInstructions": "This skill has no instructions.",
     "skills.documentBack": "Back",
+    "skills.delete": "Delete skill",
+    "skills.deleting": "Deleting…",
     "plugins.groupSwitchOff": "Enable every {group} package",
     "plugins.groupSwitchOn": "Disable every {group} package. A package with resource filters stays on, since disabling it removes them; use its own switch.",
     "plugins.bulkKeptFiltered": "{count} filtered package(s) stayed on: disabling one removes its resource filters, so use its own switch.",

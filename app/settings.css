@@ -2354,6 +2354,14 @@
     justify-content: flex-end;
   }
 
+  /* Three footer buttons no longer fit a 320px phone; wrap them instead of
+     pushing the row out of the panel. */
+  .config-footer-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    row-gap: 6px;
+  }
+
   .config-detail {
     padding: 14px;
   }

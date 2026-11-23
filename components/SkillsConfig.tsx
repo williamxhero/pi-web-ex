@@ -141,6 +141,7 @@ function SkillDetail({
   onToggle,
   toggling,
   saveError,
+  deleteError,
   updateStatus,
   checkingUpdate,
   updating,
@@ -153,6 +154,7 @@ function SkillDetail({
   onToggle: (skill: Skill) => void;
   toggling: boolean;
   saveError: string | null;
+  deleteError: string | null;
   updateStatus?: SkillUpdateResult;
   checkingUpdate: boolean;
   updating: boolean;
@@ -244,6 +246,11 @@ function SkillDetail({
           {saveError && (
             <span style={{ fontSize: 12, color: "#f87171", overflowWrap: "anywhere" }}>
               {saveError}
+            </span>
+          )}
+          {deleteError && (
+            <span role="alert" style={{ fontSize: 12, color: "#f87171", overflowWrap: "anywhere" }}>
+              {deleteError}
             </span>
           )}
         </div>
@@ -660,6 +667,8 @@ export function SkillsConfig({
   const [checkingAll, setCheckingAll] = useState(false);
   const [updatingSkill, setUpdatingSkill] = useState<string | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [projectResourcesLoaded, setProjectResourcesLoaded] = useState(true);
 
   const loadSkills = useCallback(async () => {
@@ -689,8 +698,15 @@ export function SkillsConfig({
   useEffect(() => {
     setUpdateStatuses({});
     setUpdateError(null);
+    setDeleteError(null);
     void loadSkills();
   }, [cwd]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A deletion's refusal belongs to the skill that was selected, not to the
+  // one a later click or a reload selects.
+  useEffect(() => {
+    setDeleteError(null);
+  }, [selected]);
 
   // Whether the project's skills load follows its trust, which can change while
   // this section stays mounted (hidden) in Settings: trusting from Settings ›
@@ -793,6 +809,34 @@ export function SkillsConfig({
       setUpdateError(e instanceof Error ? e.message : String(e));
     } finally {
       setUpdatingSkill(null);
+    }
+  }, [cwd, loadSkills]);
+
+  const deleteSkill = useCallback(async (skill: Skill) => {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch("/api/skills", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd, filePath: skill.filePath }),
+      });
+      const data = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`);
+      const key = updateKey(skill);
+      if (key) {
+        setUpdateStatuses((current) => {
+          const next = { ...current };
+          delete next[key];
+          return next;
+        });
+      }
+      // loadSkills() also selects the next skill once this one is gone.
+      await loadSkills();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
     }
   }, [cwd, loadSkills]);
 
@@ -1045,6 +1089,7 @@ export function SkillsConfig({
                 onToggle={toggle}
                 toggling={toggling.has(selectedSkill.filePath)}
                 saveError={saveError}
+                deleteError={deleteError}
                 updateStatus={
                   updateKey(selectedSkill)
                     ? updateStatuses[updateKey(selectedSkill)!]
@@ -1087,6 +1132,15 @@ export function SkillsConfig({
             )}
         >
           {!embedded && <ConfigButton onClick={onClose}>{t("i18n.close")}</ConfigButton>}
+          {!addMode && selectedSkill && (
+            <ConfigButton
+              variant="danger"
+              onClick={() => void deleteSkill(selectedSkill)}
+              disabled={deleting || bulkBusy}
+            >
+              {deleting ? t("skills.deleting") : t("skills.delete")}
+            </ConfigButton>
+          )}
           {skills.some((skill) => Boolean(skill.install)) && (
             <ConfigButton variant="secondary" onClick={() => void checkForUpdates()} disabled={checkingAll || updatingSkill !== null}>
               {checkingAll ? t("i18n.checking") : t("i18n.checkUpdates")}

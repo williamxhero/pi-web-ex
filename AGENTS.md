@@ -106,7 +106,7 @@ app/api/
   models-config/test/route.ts      POST test a configured model/provider
   plugins/route.ts                 GET/POST package plugin management and plugin settings (set-config: source | extension)
   plugins/check/route.ts           POST check plugin package updates
-  skills/route.ts                  GET/PATCH loaded skills, disable-model-invocation
+  skills/route.ts                  GET/PATCH/DELETE loaded skills, disable-model-invocation, delete one skill
   skills/content/route.ts          GET one loaded skill's bounded Markdown source, or ?document= a Markdown file in its folder
   skills/install/route.ts          POST install skills via npx skills add
   skills/search/route.ts           POST skills.sh search

@@ -6,7 +6,9 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { SkillToggleResult } from "@/lib/api-types";
 import { loadSkillsWithInstallInfo } from "@/lib/skills-service";
 import { setDisableModelInvocation } from "@/lib/skill-frontmatter";
+import { removeSkillFiles } from "@/lib/skill-removal";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +61,45 @@ function toggleSkillFile(
   // A skill already in the requested state keeps its file and mtime.
   if (updated !== content) writeFileSync(filePath, updated, "utf8");
   return null;
+}
+
+// DELETE /api/skills — delete one skill from the folder pi lists it in.
+// Body: { cwd, filePath }. The file path is looked up in a fresh listing, so a
+// request can only delete a skill this cwd shows, never an arbitrary path.
+// Only the standard skills folders are deletable: `lib/skill-removal.ts`
+// refuses package, plugin and settings-path skills rather than removing part
+// of a folder Pi Web does not manage.
+export async function DELETE(req: Request) {
+  if (!isApiRequestAllowed(req)) {
+    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  }
+  if (!hasJsonContentType(req)) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
+
+  try {
+    const body = (await req.json()) as { cwd?: unknown; filePath?: unknown };
+    const cwd = typeof body.cwd === "string" ? body.cwd : "";
+    const requestedPath = typeof body.filePath === "string" ? path.resolve(body.filePath) : "";
+    if (!cwd || !requestedPath) {
+      return NextResponse.json({ error: "cwd and filePath are required" }, { status: 400 });
+    }
+
+    const allowedRoots = await getAllowedFileRoots();
+    if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+
+    const { skills } = await loadSkillsWithInstallInfo(cwd);
+    const skill = skills.find((item) => path.resolve(item.filePath) === requestedPath);
+    if (!skill) return NextResponse.json({ error: "Skill not found" }, { status: 404 });
+
+    const result = removeSkillFiles(skill, { cwd, agentDir: getAgentDir() });
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
+    return NextResponse.json({ success: true });
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 });
+  }
 }
 
 // PATCH /api/skills — toggle disable-model-invocation on SKILL.md files.

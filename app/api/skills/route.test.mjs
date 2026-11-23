@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +12,8 @@ const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = agentDir;
 
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() } });
-const { PATCH } = await jiti.import("./route.ts");
+const { PATCH, DELETE } = await jiti.import("./route.ts");
+const { allowFileRoot } = await jiti.import("../../../lib/allowed-roots.ts");
 
 after(async () => {
   if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -30,6 +32,14 @@ function patchSkills(body) {
   return PATCH(new Request("http://localhost/api/skills", {
     method: "PATCH",
     headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }));
+}
+
+function deleteSkill(body) {
+  return DELETE(new Request("http://localhost/api/skills", {
+    method: "DELETE",
+    headers: { host: "localhost", "content-type": "application/json" },
     body: JSON.stringify(body),
   }));
 }
@@ -119,4 +129,62 @@ test("only markdown files are edited, however they are named in the request", as
   const batch = await patchSkills({ filePaths: [authPath], disableModelInvocation: true });
   assert.deepEqual(await batch.json(), { results: [{ filePath: authPath, error: "Not a skill file" }] });
   assert.equal(await readFile(authPath, "utf8"), auth);
+});
+
+test("DELETE removes a listed skill and refuses one the cwd does not list", async () => {
+  const cwd = join(root, "project");
+  await mkdir(cwd, { recursive: true });
+  allowFileRoot(cwd);
+
+  const filePath = await writeSkill(join(agentDir, "skills"), "deletable");
+  const response = await deleteSkill({ cwd, filePath });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { success: true });
+  assert.equal(existsSync(join(agentDir, "skills", "deletable")), false);
+
+  // A path that exists but is not a loaded skill must not be deleted by
+  // asking for it directly.
+  const outside = await writeSkill(join(root, "outside"), "outside");
+  const refused = await deleteSkill({ cwd, filePath: outside });
+  assert.equal(refused.status, 404);
+  assert.equal(existsSync(outside), true);
+});
+
+test("DELETE refuses a skill from a settings path and leaves it in place", async () => {
+  const cwd = join(root, "project");
+  await mkdir(cwd, { recursive: true });
+  allowFileRoot(cwd);
+
+  // A skill at an explicit `skills` path is listed, but only the standard
+  // skills folders may be deleted here.
+  const external = await writeSkill(join(root, "path-skills"), "external");
+  await writeFile(
+    join(agentDir, "settings.json"),
+    JSON.stringify({ skills: [join(root, "path-skills")] }),
+  );
+
+  const response = await deleteSkill({ cwd, filePath: external });
+  assert.equal(response.status, 403);
+  assert.equal(existsSync(external), true);
+  await rm(join(agentDir, "settings.json"), { force: true });
+});
+
+test("DELETE needs a JSON body and a cwd Pi Web may open", async () => {
+  const cwd = join(root, "project");
+  await mkdir(cwd, { recursive: true });
+
+  const plain = await DELETE(new Request("http://localhost/api/skills", {
+    method: "DELETE",
+    headers: { host: "localhost", "content-type": "text/plain" },
+    body: JSON.stringify({ cwd, filePath: "x" }),
+  }));
+  assert.equal(plain.status, 415);
+
+  const missing = await deleteSkill({ filePath: "x" });
+  assert.equal(missing.status, 400);
+
+  // A folder that no session or explicit choice allows is off limits even
+  // when the body is well formed.
+  const denied = await deleteSkill({ cwd: join(root, "not-allowed"), filePath: "x" });
+  assert.equal(denied.status, 403);
 });
