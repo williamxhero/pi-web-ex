@@ -87,6 +87,7 @@ import { loadAgentStripLocked, saveAgentStripLocked } from "@/lib/agent-strip-lo
 import { claimDoneChime } from "@/lib/done-chime";
 import { LoopPhaseIcon } from "./LoopPhaseIcon";
 import { type LoopPhase, DISABLE_LOOP_COMMAND, ENABLE_LOOP_COMMAND } from "@/lib/loop-to-done-toolbar";
+import { readJsonOrThrow } from "@/lib/fetch-json";
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 type AutoNameStatus =
@@ -1622,8 +1623,7 @@ export function AppShell() {
       signal: controller.signal,
     })
       .then(async (response) => {
-        const data = await response.json() as ProjectTrustStatus & { error?: string };
-        if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+        const data = await readJsonOrThrow<ProjectTrustStatus>(response);
         setProjectTrust(data);
       })
       .catch((error) => {

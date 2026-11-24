@@ -239,6 +239,67 @@ function turnLimitError(turnLimit: number, undelivered: readonly string[]): stri
   return `${error} These queued messages were not delivered:\n${undelivered.map((text) => `- ${text}`).join("\n")}`;
 }
 
+type TurnLimitedSession = Awaited<ReturnType<typeof createAgentSessionFromServices>>["session"];
+
+/**
+ * Holds a run to the profile's `max_turns` through the SDK's awaited `finishTurn` hook: one
+ * wrap-up turn when the SDK would otherwise continue, then `end`. Every run, a `resume`
+ * included, counts from zero. Returns undefined with no limit; `restore()` undoes the hooks.
+ */
+function installTurnLimiter(
+  inner: TurnLimitedSession,
+  stored: StoredSubagentExecution,
+  turnLimit: number | undefined,
+): { error(): string | undefined; restore(): void } | undefined {
+  if (!turnLimit) return undefined;
+  let turnCount = 0;
+  let maxTurnsReached = false;
+  let undelivered: string[] = [];
+  const previousFinishTurn = inner.agent.finishTurn;
+  const previousSteeringMode = inner.agent.steeringMode;
+  // Finalized events retain the SDK's terminate hint; tool-result messages do not.
+  const terminatingTools = new Set<string>();
+  const unsubscribeTools = inner.subscribe((event) => {
+    if (event.type === "tool_execution_end" && event.result?.terminate === true) {
+      terminatingTools.add(event.toolCallId);
+    }
+  });
+  inner.agent.finishTurn = async (turn, signal) => {
+    const decision = (await previousFinishTurn?.(turn, signal)) ?? undefined;
+    const toolsContinue = turn.toolResults.some((message) => !terminatingTools.has(message.toolCallId));
+    terminatingTools.clear();
+    turnCount += 1;
+    if (turnCount >= turnLimit) stored.turnsUsed = true;
+    if (signal?.aborted || decision?.action === "end" ||
+      turn.message.stopReason === "error" || turn.message.stopReason === "aborted") return decision;
+    const needsAnotherTurn = toolsContinue || decision?.action === "continue" || inner.agent.hasQueuedMessages();
+    if (!needsAnotherTurn || turnCount < turnLimit) return decision;
+    if (turnCount >= turnLimit + 1) {
+      maxTurnsReached = true;
+      stored.turnLimitReached = true;
+      // AgentSession starts another run for anything still queued, past an `end`
+      // decision, so the limit holds only once the queues are empty.
+      const { steering, followUp } = inner.clearQueue();
+      undelivered = [...undelivered, ...steering, ...followUp];
+      return { action: "end" };
+    }
+    // The awaited SDK boundary delivers the instruction before the wrap-up request.
+    // In one-at-a-time mode a steer queued earlier would take the wrap-up turn and
+    // leave the instruction for later, so that turn takes everything queued.
+    inner.agent.steeringMode = "all";
+    await inner.steer(TURN_LIMIT_INSTRUCTION);
+    return decision;
+  };
+  return {
+    error: () => (maxTurnsReached ? turnLimitError(turnLimit, undelivered) : undefined),
+    restore: () => {
+      inner.agent.finishTurn = previousFinishTurn;
+      inner.agent.steeringMode = previousSteeringMode;
+      unsubscribeTools();
+    },
+  };
+}
+
 /**
  * A child with `mcp: on` connects its servers before its prompt, as a prompt sent to the wrapper
  * does. The parent's Stop and `abort()` end the wait through `stored.mcpWait`, the child's own
@@ -916,47 +977,7 @@ export function createSubagentController(
           dependencies.invalidateSessionList();
           return result;
         }
-        let turnCount = 0;
-        let maxTurnsReached = false;
-        let undelivered: string[] = [];
-        const previousFinishTurn = inner.agent.finishTurn;
-        const previousSteeringMode = inner.agent.steeringMode;
-        let unsubscribeTools: (() => void) | undefined;
-        if (turnLimit) {
-          // Finalized events retain the SDK's terminate hint; tool-result messages do not.
-          const terminatingTools = new Set<string>();
-          unsubscribeTools = inner.subscribe((event) => {
-            if (event.type === "tool_execution_end" && event.result?.terminate === true) {
-              terminatingTools.add(event.toolCallId);
-            }
-          });
-          inner.agent.finishTurn = async (turn, signal) => {
-            const decision = (await previousFinishTurn?.(turn, signal)) ?? undefined;
-            const toolsContinue = turn.toolResults.some((message) => !terminatingTools.has(message.toolCallId));
-            terminatingTools.clear();
-            turnCount += 1;
-            if (turnCount >= turnLimit) stored.turnsUsed = true;
-            if (signal?.aborted || decision?.action === "end" ||
-              turn.message.stopReason === "error" || turn.message.stopReason === "aborted") return decision;
-            const needsAnotherTurn = toolsContinue || decision?.action === "continue" || inner.agent.hasQueuedMessages();
-            if (!needsAnotherTurn || turnCount < turnLimit) return decision;
-            if (turnCount >= turnLimit + 1) {
-              maxTurnsReached = true;
-              stored.turnLimitReached = true;
-              // AgentSession starts another run for anything still queued, past an `end`
-              // decision, so the limit holds only once the queues are empty.
-              const { steering, followUp } = inner.clearQueue();
-              undelivered = [...undelivered, ...steering, ...followUp];
-              return { action: "end" };
-            }
-            // The awaited SDK boundary delivers the instruction before the wrap-up request.
-            // In one-at-a-time mode a steer queued earlier would take the wrap-up turn and
-            // leave the instruction for later, so that turn takes everything queued.
-            inner.agent.steeringMode = "all";
-            await inner.steer(TURN_LIMIT_INSTRUCTION);
-            return decision;
-          };
-        }
+        const limiter = installTurnLimiter(inner, stored, turnLimit);
         let result: SubagentRunInfo;
         const runStart = sessionManager.getEntries().length;
         beginProjectCommandRun(sessionManager);
@@ -973,8 +994,7 @@ export function createSubagentController(
           const text = runResultText(sessionManager, runStart);
           const stop = stored.abortRequested ? undefined : lastAssistantStop(sessionManager);
           const aborted = stored.abortRequested || stop?.aborted === true;
-          const errorMessage = aborted ? undefined : stop?.error ??
-            (maxTurnsReached && turnLimit ? turnLimitError(turnLimit, undelivered) : undefined) ??
+          const errorMessage = aborted ? undefined : stop?.error ?? limiter?.error() ??
             managedCommandFailure(sessionManager.getEntries(), runStart, evidence?.outcomes);
           result = {
             ...initialRun,
@@ -997,11 +1017,7 @@ export function createSubagentController(
           };
         } finally {
           evidence ??= takeProjectCommandRun(sessionManager);
-          if (turnLimit) {
-            inner.agent.finishTurn = previousFinishTurn;
-            inner.agent.steeringMode = previousSteeringMode;
-          }
-          unsubscribeTools?.();
+          limiter?.restore();
           request.signal?.removeEventListener("abort", handleParentAbort);
         }
 
@@ -1169,6 +1185,8 @@ export function createSubagentController(
       // Earlier runs' messages are on the same branch; only this run's answers are its result.
       const runStart = manager.getEntries().length;
       let evidence: ReturnType<typeof takeProjectCommandRun>;
+      let commandRunStarted = false;
+      let limiter: ReturnType<typeof installTurnLimiter>;
       try {
         if (!wrapper!.isAlive()) throw new Error(CLOSED_BEFORE_RUN);
         if (wrapper!.isRunning() || wrapper!.isDirectPromptArriving?.()) throw new Error("Subagent is already running");
@@ -1177,13 +1195,21 @@ export function createSubagentController(
         stored.run = { ...stored.run, status: "running" };
         reportRunUpdate(request, stored.run);
         beginProjectCommandRun(manager);
+        commandRunStarted = true;
+        // A resumed run starts a fresh turn budget, after claiming the child.
+        limiter = installTurnLimiter(
+          wrapper!.inner as unknown as TurnLimitedSession,
+          stored,
+          resolveSubagentProfile(parent.cwd, existing.profile)?.maxTurns,
+        );
         await prepareChildMcp(wrapper, stored);
         await wrapper!.inner.prompt(request.task, { source: "rpc" });
         evidence = takeProjectCommandRun(manager);
         const text = runResultText(manager, runStart);
         const stop = stored.abortRequested ? undefined : lastAssistantStop(manager);
         const aborted = stored.abortRequested || stop?.aborted === true;
-        const errorMessage = aborted ? undefined : stop?.error ?? managedCommandFailure(manager.getEntries(), runStart, evidence?.outcomes);
+        const errorMessage = aborted ? undefined : stop?.error ?? limiter?.error() ??
+          managedCommandFailure(manager.getEntries(), runStart, evidence?.outcomes);
         result = {
           ...initialRun,
           status: aborted ? "aborted" : errorMessage ? "failed" : "completed",
@@ -1201,7 +1227,8 @@ export function createSubagentController(
           ...(!stored.abortRequested && !request.signal?.aborted ? { error: error instanceof Error ? error.message : String(error) } : {}),
         };
       } finally {
-        evidence ??= takeProjectCommandRun(manager);
+        if (commandRunStarted) evidence ??= takeProjectCommandRun(manager);
+        limiter?.restore();
         request.signal?.removeEventListener("abort", handleParentAbort);
       }
       result = recordResult(manager, { ...result, ...unconfirmedCleanup(manager.getEntries(), runStart),

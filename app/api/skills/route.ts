@@ -7,7 +7,7 @@ import type { SkillToggleResult } from "@/lib/api-types";
 import { loadSkillsWithInstallInfo } from "@/lib/skills-service";
 import { setDisableModelInvocation } from "@/lib/skill-frontmatter";
 import { removeSkillFiles } from "@/lib/skill-removal";
-import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { cwdAccessRefusal, getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
@@ -17,14 +17,11 @@ export const dynamic = "force-dynamic";
 // skill paths, package skills, and .agents/skills directories are all included.
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const cwd = searchParams.get("cwd");
-  if (!cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
+  const cwd = searchParams.get("cwd") ?? "";
 
   try {
-    const allowedRoots = await getAllowedFileRoots();
-    if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
-    }
+    const refused = await cwdAccessRefusal(cwd);
+    if (refused) return refused;
     return NextResponse.json(await loadSkillsWithInstallInfo(cwd));
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
@@ -85,10 +82,8 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: "cwd and filePath are required" }, { status: 400 });
     }
 
-    const allowedRoots = await getAllowedFileRoots();
-    if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
-    }
+    const refused = await cwdAccessRefusal(cwd);
+    if (refused) return refused;
 
     const { skills } = await loadSkillsWithInstallInfo(cwd);
     const skill = skills.find((item) => path.resolve(item.filePath) === requestedPath);
