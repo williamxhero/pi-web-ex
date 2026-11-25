@@ -269,16 +269,77 @@ const SLASH_SOURCE_ORDER: Record<SlashCommandSource, number> = {
   skill: 3,
 };
 
+// How well a query names a command, best first. The literal ranks come before
+// the abbreviation ones, so any spelled-out match outranks every fuzzy one.
+const SLASH_RANK = {
+  exact: 0,
+  prefix: 1,
+  substring: 2,
+  /** Separators dropped: "tospectodone". */
+  compact: 3,
+  /** One letter per segment: "tstd". */
+  initials: 4,
+  compactPrefix: 5,
+  /** Any other subsequence: "todone". */
+  subsequence: 6,
+} as const;
+
+/** No rank: the name does not match, and the palette searches descriptions instead. */
+const SLASH_RANK_NONE = 7;
+
+const SKILL_SLASH_PREFIX = "skill:";
+
+/** What separates the words of a command or skill name. */
+const SLASH_NAME_SEPARATORS = /[\s._:/-]+/;
+
+function compactSlashName(name: string): string {
+  return name.split(SLASH_NAME_SEPARATORS).join("");
+}
+
+function slashNameInitials(name: string): string {
+  return name.split(SLASH_NAME_SEPARATORS).map((part) => part[0] ?? "").join("");
+}
+
+/** Whether every character of `needle` appears in `haystack` in order. */
+function isSubsequence(needle: string, haystack: string): boolean {
+  let matched = 0;
+  for (let i = 0; i < haystack.length && matched < needle.length; i += 1) {
+    if (haystack[i] === needle[matched]) matched += 1;
+  }
+  return matched === needle.length;
+}
+
+/**
+ * The abbreviation ranks, so `/tstd`, `/tospectodone` and `/todone` all find
+ * `skill:to-spec-to-done`: the query is read as the name's characters without
+ * its separators, then as its segments' initials, then as a subsequence of the
+ * joined name. A single character is no abbreviation, so it matches nothing
+ * here rather than returning every name that happens to hold it. A query that
+ * spells the `skill:` prefix is not an abbreviation: the literal ranks above
+ * answer it.
+ */
+function slashAbbreviationRank(bareName: string, query: string): number {
+  if (query.length < 2) return SLASH_RANK_NONE;
+  if (slashNameInitials(bareName) === query) return SLASH_RANK.initials;
+  const compact = compactSlashName(bareName);
+  if (compact === query) return SLASH_RANK.compact;
+  if (compact.startsWith(query)) return SLASH_RANK.compactPrefix;
+  if (isSubsequence(query, compact)) return SLASH_RANK.subsequence;
+  return SLASH_RANK_NONE;
+}
+
 // pi's TUI matches a skill by its bare name (pi-tui's
 // CombinedAutocompleteProvider), so `/copy` finds `skill:copy-text` by prefix;
 // the full `skill:<name>` still matches a query that spells the prefix.
 function slashMatchRank(command: SlashCommandPaletteItem, query: string): number {
   const name = command.name.toLowerCase();
-  const bareName = command.source === "skill" && name.startsWith("skill:") ? name.slice("skill:".length) : name;
-  if (bareName === query || name === query) return 0;
-  if (bareName.startsWith(query) || name.startsWith(query)) return 1;
-  if (name.includes(query)) return 2;
-  return 3;
+  const bareName = command.source === "skill" && name.startsWith(SKILL_SLASH_PREFIX)
+    ? name.slice(SKILL_SLASH_PREFIX.length)
+    : name;
+  if (bareName === query || name === query) return SLASH_RANK.exact;
+  if (bareName.startsWith(query) || name.startsWith(query)) return SLASH_RANK.prefix;
+  if (name.includes(query)) return SLASH_RANK.substring;
+  return slashAbbreviationRank(bareName, query);
 }
 
 function getSlashDescription(command: SlashCommandPaletteItem, t: (key: string) => string): string {
@@ -333,6 +394,9 @@ export function slashCompletionEdit(
  * The palette's matches for a lower-cased query. pi's TUI matches names only;
  * the palette searches descriptions too, but only when no name matches, so
  * `/copy` lists the built-in, not every skill whose description says "copy".
+ * An abbreviation ranks below every literal match and still before descriptions,
+ * and every name that reaches any rank lists, so `/tstd` fits several skills
+ * with all of them shown, strongest first.
  */
 export function filterSlashCommands(
   commands: SlashCommandPaletteItem[],
@@ -340,7 +404,7 @@ export function filterSlashCommands(
   t: (key: string) => string,
 ): SlashCommandPaletteItem[] {
   const ranked = commands.map((command) => ({ command, rank: slashMatchRank(command, query) }));
-  const byName = ranked.filter(({ rank }) => rank < 3);
+  const byName = ranked.filter(({ rank }) => rank < SLASH_RANK_NONE);
   const matches = byName.length > 0
     ? byName
     : ranked.filter(({ command }) => getSlashDescription(command, t).toLowerCase().includes(query));

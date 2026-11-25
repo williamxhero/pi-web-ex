@@ -35,6 +35,35 @@ test("descriptions are searched only when no name matches", () => {
   assert.deepEqual(names(filterSlashCommands(commands, "assistant", t)), ["copy", "daily-brief"]);
 });
 
+const skillCommands = [
+  { name: "skill:to-spec-to-done", description: "Spec, then implement", source: "skill" },
+  { name: "skill:to-spec-then-deliver", description: "The longer path", source: "skill" },
+  { name: "skill:tour-settings-delete", description: "Unrelated", source: "skill" },
+  { name: "skill:dialog-to-audio", description: "Audio", source: "skill" },
+];
+
+test("a hyphenated skill name answers to its letters without the separators", () => {
+  assert.deepEqual(names(filterSlashCommands(skillCommands, "tospectodone", t)), ["skill:to-spec-to-done"]);
+  // The literal ranks still answer a query that spells the `skill:` prefix.
+  assert.deepEqual(names(filterSlashCommands(skillCommands, "skill:to-spec", t)), [
+    "skill:to-spec-then-deliver",
+    "skill:to-spec-to-done",
+  ]);
+});
+
+test("a name is found by the initials of its segments, or by any subsequence of it", () => {
+  assert.deepEqual(names(filterSlashCommands(skillCommands, "tstd", t)), [
+    "skill:to-spec-then-deliver",
+    "skill:to-spec-to-done",
+    "skill:tour-settings-delete",
+  ]);
+  assert.deepEqual(names(filterSlashCommands(skillCommands, "todone", t)), ["skill:to-spec-to-done"]);
+});
+
+test("a single character is no abbreviation", () => {
+  assert.deepEqual(names(filterSlashCommands(skillCommands, "z", t)), []);
+});
+
 test("an empty query lists everything by source, then name", () => {
   assert.deepEqual(names(filterSlashCommands(commands, "", t)), [
     "compact",
