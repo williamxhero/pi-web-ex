@@ -2244,7 +2244,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
     switch (id) {
       case "open-new-tab": openFamilyInNewTab(family); break;
       case "copy-session-id":
-        void copyText(family.root.id).then(
+        void copyText(`session=${family.root.id}`).then(
           () => showToast(t("sidebar.sessionIdCopied")),
           () => showToast(t("sidebar.copySessionIdFailed")),
         );
