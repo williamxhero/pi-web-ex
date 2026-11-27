@@ -1541,6 +1541,8 @@ export class AgentSessionWrapper {
               maxChars,
             ),
           );
+          // Streaming can end during the read while a managed run still owns the child.
+          checkManagedMessageAdmission();
           // A steer or follow-up joins the run beside a `!` command, as pi's TUI
           // queues it; only a prompt that would start a run waits for the command.
           if (this.shellRunning && !(command.streamingBehavior && this.inner.isStreaming)) {
