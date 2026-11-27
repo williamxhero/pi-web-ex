@@ -64,6 +64,42 @@ test("a single character is no abbreviation", () => {
   assert.deepEqual(names(filterSlashCommands(skillCommands, "z", t)), []);
 });
 
+// The `skill:` namespace is not part of a name: typing `/skill` asks for skills
+// whose name holds "skill", not for the whole skill list (#9).
+const namespaceCommands = [
+  { name: "skill:to-spec-to-done", description: "Spec, then implement", source: "skill" },
+  { name: "skill:browser-skill", description: "Drive the browser", source: "skill" },
+  { name: "skill:writing-great-skills", description: "How to write a skill", source: "skill" },
+  { name: "copy", description: "Copy the last assistant message", source: "builtin" },
+];
+
+test("the skill namespace counts only when the query spells its colon", () => {
+  assert.deepEqual(names(filterSlashCommands(namespaceCommands, "skill", t)), [
+    "skill:browser-skill",
+    "skill:writing-great-skills",
+  ]);
+  assert.deepEqual(names(filterSlashCommands(namespaceCommands, "kill", t)), [
+    "skill:browser-skill",
+    "skill:writing-great-skills",
+  ]);
+  // A spelled namespace still browses every skill, and still filters by name.
+  assert.deepEqual(names(filterSlashCommands(namespaceCommands, "skill:", t)), [
+    "skill:browser-skill",
+    "skill:to-spec-to-done",
+    "skill:writing-great-skills",
+  ]);
+  assert.deepEqual(names(filterSlashCommands(namespaceCommands, "skill:to-spec", t)), [
+    "skill:to-spec-to-done",
+  ]);
+  // The namespace is no abbreviation input either: initials that include its colon's word
+  // (`ststd`) name nothing, so `/tstd` stays the way to reach the skill.
+  assert.deepEqual(names(filterSlashCommands(namespaceCommands, "ststd", t)), []);
+  // The bare-name ranks are unchanged.
+  assert.deepEqual(names(filterSlashCommands(namespaceCommands, "to-spec", t)), [
+    "skill:to-spec-to-done",
+  ]);
+});
+
 test("an empty query lists everything by source, then name", () => {
   assert.deepEqual(names(filterSlashCommands(commands, "", t)), [
     "compact",

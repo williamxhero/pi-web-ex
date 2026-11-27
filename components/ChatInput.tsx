@@ -497,17 +497,19 @@ function slashAbbreviationRank(bareName: string, query: string): number {
   return SLASH_RANK_NONE;
 }
 
-// pi's TUI matches a skill by its bare name (pi-tui's
-// CombinedAutocompleteProvider), so `/copy` finds `skill:copy-text` by prefix;
-// the full `skill:<name>` still matches a query that spells the prefix.
+// The `skill:` namespace is not part of a skill's name: a query without its
+// colon reads as a name fragment, so `/skill` finds `writing-great-skills`
+// rather than every skill, and `/kill` no longer matches them all by substring.
+// Only a query that spells the prefix with its colon compares full names, so
+// `/skill:` still browses every skill and `/skill:to-` still filters by name.
 function slashMatchRank(command: SlashCommandPaletteItem, query: string): number {
   const name = command.name.toLowerCase();
-  const bareName = command.source === "skill" && name.startsWith(SKILL_SLASH_PREFIX)
-    ? name.slice(SKILL_SLASH_PREFIX.length)
-    : name;
-  if (bareName === query || name === query) return SLASH_RANK.exact;
-  if (bareName.startsWith(query) || name.startsWith(query)) return SLASH_RANK.prefix;
-  if (name.includes(query)) return SLASH_RANK.substring;
+  const isSkill = command.source === "skill" && name.startsWith(SKILL_SLASH_PREFIX);
+  const bareName = isSkill ? name.slice(SKILL_SLASH_PREFIX.length) : name;
+  const matchName = isSkill && query.startsWith(SKILL_SLASH_PREFIX) ? name : bareName;
+  if (matchName === query) return SLASH_RANK.exact;
+  if (matchName.startsWith(query)) return SLASH_RANK.prefix;
+  if (matchName.includes(query)) return SLASH_RANK.substring;
   return slashAbbreviationRank(bareName, query);
 }
 
