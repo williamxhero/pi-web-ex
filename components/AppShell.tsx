@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { OpenSessionContext } from "./open-session-context";
 import { SessionSidebar, type SelectSessionOptions, type SessionSidebarControl } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { NewSessionContextBar, type NewSessionContextControl } from "./NewSessionContextBar";
@@ -77,6 +78,7 @@ import type { AgentEndInfo, NewSessionChoices } from "@/hooks/useAgentSession";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import { formatActiveDuration, formatCompactCount, formatCostShort } from "@/lib/session-stats-format";
 import type { FileViewerState } from "@/lib/file-viewer-state";
+import type { FileLinkTarget } from "@/lib/file-links";
 import { PRESET_READ_ONLY, type ToolEntry } from "@/lib/tool-presets";
 import { createSideChat, deleteSideChat } from "@/lib/side-chat-client";
 import { sideChatHit } from "@/lib/session-search-hit";
@@ -88,6 +90,7 @@ import { claimDoneChime } from "@/lib/done-chime";
 import { LoopPhaseIcon } from "./LoopPhaseIcon";
 import { type LoopPhase, DISABLE_LOOP_COMMAND, ENABLE_LOOP_COMMAND } from "@/lib/loop-to-done-toolbar";
 import { readJsonOrThrow } from "@/lib/fetch-json";
+import { errorMessage } from "@/lib/errors";
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 type AutoNameStatus =
@@ -746,6 +749,25 @@ export function AppShell() {
     if (isMobile) { setRightPanelOpen(false); setSidebarOpen(false); }
   }, [isMobile]);
 
+  // The row menu's "Insert into chat": the session becomes a chip in the open
+  // composer and its token is written when that message is sent (#1716).
+  const handleInsertSessionReference = useCallback((session: SessionInfo) => {
+    chatInputRef.current?.addSessionReference({
+      id: session.id,
+      title: session.name || session.firstMessage || session.id,
+      cwd: session.cwd,
+      modified: session.modified,
+    });
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
+  // A quoted session's title in the transcript opens it here, as its sidebar
+  // row does: the sidebar holds the list and the pick rules (side chats).
+  const openSessionInPage = useCallback(
+    (sessionId: string) => sidebarControlRef.current?.openSession(sessionId) ?? false,
+    [],
+  );
+
   const handleAtMentions = useCallback((relativePaths: string[]) => {
     const mentions = buildFileAtMentionsText(relativePaths);
     if (mentions) chatInputRef.current?.insertText(mentions);
@@ -861,7 +883,7 @@ export function AppShell() {
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
-        setInitialCwdError(error instanceof Error ? error.message : String(error));
+        setInitialCwdError(errorMessage(error));
         setInitialCwdStatus("error");
       });
 
@@ -1262,7 +1284,7 @@ export function AppShell() {
       autoNameTimerRef.current = setTimeout(() => setAutoNameStatus({ kind: "idle" }), 1800);
     } catch (error) {
       if (activeSessionIdRef.current !== sessionId) return;
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       setAutoNameStatus({ kind: "error", message });
       autoNameTimerRef.current = setTimeout(() => setAutoNameStatus({ kind: "idle" }), 5000);
     }
@@ -1353,17 +1375,17 @@ export function AppShell() {
   const handleOpenFile = useCallback((
     filePath: string,
     fileName: string,
-    options?: { sourceSessionId?: string | null; modeHint?: "diff"; page?: number },
+    options?: { sourceSessionId?: string | null; modeHint?: "diff"; target?: FileLinkTarget },
   ) => {
     const sourceSessionId = options?.sourceSessionId;
     const modeHint = options?.modeHint;
-    const page = options?.page;
     const tabId = `file:${filePath}`;
     setFileTabs((prev) => openFileTab(prev, {
       fileName,
       filePath,
       modeHint,
-      page,
+      page: options?.target?.page,
+      lines: options?.target?.lines,
       sourceSessionId,
       tabId,
     }));
@@ -1373,8 +1395,8 @@ export function AppShell() {
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
-  const handleOpenLinkedFile = useCallback((filePath: string, page?: number) => {
-    handleOpenFile(filePath, getFileName(filePath), { sourceSessionId: selectedSession?.id ?? null, page });
+  const handleOpenLinkedFile = useCallback((filePath: string, target?: FileLinkTarget) => {
+    handleOpenFile(filePath, getFileName(filePath), { sourceSessionId: selectedSession?.id ?? null, target });
   }, [handleOpenFile, selectedSession?.id]);
 
   const handleOpenTerminal = useCallback((cwd: string) => {
@@ -1654,7 +1676,7 @@ export function AppShell() {
       setModelsRefreshKey((key) => key + 1);
       setSessionKey((key) => key + 1);
     } catch (error) {
-      setProjectTrustError({ error: error instanceof Error ? error.message : String(error) });
+      setProjectTrustError({ error: errorMessage(error) });
     } finally {
       setProjectTrustBusy(false);
     }
@@ -1713,6 +1735,7 @@ export function AppShell() {
         onExplorerRefresh={handleExplorerRefresh}
         onAtMention={handleAtMention}
         onAtMentions={handleAtMentions}
+        onInsertSessionReference={handleInsertSessionReference}
         onBackgroundTaskDone={handleBackgroundTaskDone}
         hiddenFinishedSessionIds={hiddenFinishedSessionIds}
         onRunningSessionIdsChange={handleRunningSessionIdsChange}
@@ -2179,7 +2202,6 @@ export function AppShell() {
 
     const tokens = sessionStats?.tokens;
     const cost = sessionStats?.cost ?? 0;
-    const formatCompact = formatCompactCount;
     const costText = formatCostShort(cost);
 
     let contextColor = "var(--text-muted)";
@@ -2190,8 +2212,8 @@ export function AppShell() {
       if (percent !== null && percent > 90) contextColor = "#ef4444";
       else if (percent !== null && percent > 70) contextColor = "rgba(234,179,8,0.95)";
       desktopContextText = percent !== null
-        ? `${percent.toFixed(0)}% / ${formatCompact(contextUsage.contextWindow)}`
-        : `? / ${formatCompact(contextUsage.contextWindow)}`;
+        ? `${percent.toFixed(0)}% / ${formatCompactCount(contextUsage.contextWindow)}`
+        : `? / ${formatCompactCount(contextUsage.contextWindow)}`;
       mobileContextText = percent !== null ? `${percent.toFixed(0)}%` : null;
     }
 
@@ -2262,7 +2284,7 @@ export function AppShell() {
                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <line x1="5" y1="8.5" x2="5" y2="1.5" /><polyline points="2 4 5 1.5 8 4" />
                 </svg>
-                {formatCompact(tokens.input)}
+                {formatCompactCount(tokens.input)}
               </span>
             )}
             {tokens && tokens.output > 0 && (
@@ -2270,7 +2292,7 @@ export function AppShell() {
                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <line x1="5" y1="1.5" x2="5" y2="8.5" /><polyline points="2 6 5 8.5 8 6" />
                 </svg>
-                {formatCompact(tokens.output)}
+                {formatCompactCount(tokens.output)}
               </span>
             )}
             {costText && (
@@ -2296,7 +2318,7 @@ export function AppShell() {
                 <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <line x1="5" y1="8.5" x2="5" y2="1.5" /><polyline points="2 4 5 1.5 8 4" />
                 </svg>
-                {formatCompact(tokens.input)}
+                {formatCompactCount(tokens.input)}
               </span>
             )}
             {tokens && tokens.output > 0 && (
@@ -2304,7 +2326,7 @@ export function AppShell() {
                 <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <line x1="5" y1="1.5" x2="5" y2="8.5" /><polyline points="2 6 5 8.5 8 6" />
                 </svg>
-                {formatCompact(tokens.output)}
+                {formatCompactCount(tokens.output)}
               </span>
             )}
             {tokens && tokens.cacheRead > 0 && (
@@ -2312,7 +2334,7 @@ export function AppShell() {
                 <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M8.5 5a3.5 3.5 0 1 1-1-2.45" /><polyline points="6.5 1.5 8.5 2.5 7.5 4.5" />
                 </svg>
-                {formatCompact(tokens.cacheRead)}
+                {formatCompactCount(tokens.cacheRead)}
               </span>
             )}
             {costText && (
@@ -2412,7 +2434,7 @@ export function AppShell() {
   };
 
   return (
-    <>
+    <OpenSessionContext.Provider value={openSessionInPage}>
     <style>{`
       @keyframes session-info-pop {
         0% {
@@ -3135,6 +3157,7 @@ export function AppShell() {
               gitRefreshKey={explorerRefreshKey}
               initialDisplayMode={activeFileTab.initialDisplayMode}
               initialPage={activeFileTab.page}
+              initialLines={activeFileTab.lines}
               initialState={activeFileTab.viewerState}
               watchEnabled={rightPanelOpen}
               onStateChange={(viewerState) => handleFileViewerStateChange(
@@ -3145,10 +3168,10 @@ export function AppShell() {
               )}
               onMentionLines={rightPanelOpen ? handleFileLineMention : undefined}
               onAtMention={handleAtMention}
-              onOpenFile={(filePath, page) => handleOpenFile(
+              onOpenFile={(filePath, target) => handleOpenFile(
                 filePath,
                 getFileName(filePath),
-                { sourceSessionId: activeFileTab.sourceSessionId, page },
+                { sourceSessionId: activeFileTab.sourceSessionId, target },
               )}
             />
           ) : !terminalTabs.some((tab) => tab.id === activeFileTabId) && !activeAgentTab ? (
@@ -3232,6 +3255,6 @@ export function AppShell() {
         onStatus={setProjectTrust}
       />
     )}
-    </>
+    </OpenSessionContext.Provider>
   );
 }

@@ -13,7 +13,7 @@ import {
 import { cwdAccessRefusal, getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import { getProjectTrustStatus } from "@/lib/project-trust";
-import { isPluginSourceCheckable } from "@/lib/plugin-updates";
+import { isPluginSourceCheckable, toPluginScope } from "@/lib/plugin-updates";
 import {
   findPluginConfigDescriptor,
   PluginConfigError,
@@ -33,6 +33,7 @@ import type {
   PluginsResponse,
   PluginToggleResult,
 } from "@/lib/api-types";
+import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
 
@@ -40,10 +41,6 @@ type PluginAction = "install" | "remove" | "update" | "disable" | "enable" | "se
 
 function emptyCounts(): PluginResourceCounts {
   return { extensions: 0, skills: 0, prompts: 0, themes: 0 };
-}
-
-function toPluginScope(scope: string): PluginScope {
-  return scope === "project" ? "project" : "global";
 }
 
 function keyFor(source: string, scope: PluginScope): string {
@@ -197,7 +194,7 @@ function readPackageList(value: unknown): { source: string; scope: PluginScope }
   for (const item of value) {
     const source = typeof item?.source === "string" ? item.source.trim() : "";
     if (!source) return null;
-    const scope = readScope(item.scope);
+    const scope = toPluginScope(item.scope);
     packages.set(keyFor(source, scope), { source, scope });
   }
   return [...packages.values()];
@@ -426,7 +423,7 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
   } catch (error) {
     diagnostics.push({
       type: "error",
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMessage(error),
     });
   }
 
@@ -491,10 +488,6 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
   };
 }
 
-function readScope(scope: unknown): PluginScope {
-  return scope === "project" ? "project" : "global";
-}
-
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const cwd = searchParams.get("cwd") ?? "";
@@ -539,7 +532,7 @@ async function setPluginConfig(
       { status: 400 },
     );
   }
-  const configScope = readScope(body.configScope);
+  const configScope = toPluginScope(body.configScope);
   if (configScope === "project" && !context.projectTrusted) {
     return NextResponse.json(
       { error: "Project resources must be trusted before writing project config" },
@@ -635,7 +628,7 @@ export async function POST(req: Request) {
     // configured for one project.
     if (body.action === "set-config") {
       const cwd = body.cwd;
-      const packageScope = readScope(body.scope);
+      const packageScope = toPluginScope(body.scope);
       const configured = new DefaultPackageManager({ cwd, agentDir, settingsManager }).listConfiguredPackages();
       const entry = body.source
         ? configured.find((pkg) => pkg.source === body.source && toPluginScope(pkg.scope) === packageScope)
@@ -668,7 +661,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ...(await readPlugins(body.cwd)), results } satisfies PluginsBulkResponse);
     }
 
-    const scope = readScope(body.scope);
+    const scope = toPluginScope(body.scope);
     if (scope === "project" && !projectTrust.trusted) {
       return NextResponse.json(
         { error: "Project resources must be trusted before modifying project plugins" },
@@ -711,7 +704,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json(await readPlugins(body.cwd));
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    return NextResponse.json({ error: errorMessage(error) }, { status: 500 });
   } finally {
     // The provider lists share one extension-loaded runtime, and a package can
     // add or drop a provider; an update that failed halfway may have, too. An

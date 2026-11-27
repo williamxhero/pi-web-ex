@@ -3,6 +3,7 @@ import { resolveSessionPath } from "@/lib/session-reader";
 import { startRpcSession, getRpcSession, setRpcSessionTools } from "@/lib/rpc-manager";
 import { cwdMissingBody, missingCwdFromBody } from "@/lib/missing-cwd";
 import { EXTENSION_REPORTED_CODE, MANAGED_RUN_CONFLICT_CODE } from "@/lib/agent-client";
+import { errorMessage } from "@/lib/errors";
 
 // POST /api/agent/[id] - Send a command to an existing session
 export async function POST(
@@ -67,7 +68,7 @@ export async function POST(
     const status = (error as { status?: number })?.status;
     const managedConflict = (error as { code?: unknown } | null)?.code === MANAGED_RUN_CONFLICT_CODE;
     return NextResponse.json({
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       ...(missingCwd ? cwdMissingBody(missingCwd) : {}),
       ...((error as { code?: unknown } | null)?.code === EXTENSION_REPORTED_CODE ? { code: EXTENSION_REPORTED_CODE } : {}),
       ...(managedConflict ? { code: MANAGED_RUN_CONFLICT_CODE, accepted: false }

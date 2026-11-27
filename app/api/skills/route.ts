@@ -9,6 +9,7 @@ import { setDisableModelInvocation } from "@/lib/skill-frontmatter";
 import { removeSkillFiles } from "@/lib/skill-removal";
 import { cwdAccessRefusal, getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
 
@@ -125,7 +126,7 @@ export async function PATCH(req: Request) {
           const refused = toggleSkillFile(target, disableModelInvocation, allowedRoots);
           results.push(refused ? { filePath: target, error: refused.error } : { filePath: target });
         } catch (e) {
-          results.push({ filePath: target, error: e instanceof Error ? e.message : String(e) });
+          results.push({ filePath: target, error: errorMessage(e) });
         }
       }
       return NextResponse.json({ results });
