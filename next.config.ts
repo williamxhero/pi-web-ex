@@ -2,9 +2,10 @@ import type { NextConfig } from "next";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
 
 const configDir = dirname(fileURLToPath(import.meta.url));
-const { version } = JSON.parse(readFileSync(join(configDir, "package.json"), "utf8")) as { version: string };
+const { APP_VERSION } = createRequire(import.meta.url)("./bin/ex-product.js") as typeof import("./bin/ex-product");
 let piVersion = "unknown";
 try {
   const piPkgPath = join(configDir, "node_modules/@earendil-works/pi-coding-agent/package.json");
@@ -102,7 +103,7 @@ const nextConfig: NextConfig = {
     ];
   },
   env: {
-    NEXT_PUBLIC_APP_VERSION: version,
+    NEXT_PUBLIC_APP_VERSION: APP_VERSION,
     NEXT_PUBLIC_PI_VERSION: piVersion,
   },
 };

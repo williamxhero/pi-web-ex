@@ -1,5 +1,5 @@
 /**
- * Routes a Pi Web `/api/*` request to its in-browser mock. Handlers mirror the
+ * Routes a Pi Web Ex `/api/*` request to its in-browser mock. Handlers mirror the
  * real route handlers under app/api in the main project: same paths, methods
  * and response shapes.
  */

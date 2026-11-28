@@ -18,11 +18,11 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function getPackageVersion(pkgDir = path.join(__dirname, "..")) {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require(path.join(pkgDir, "package.json")).version;
+  return require(path.join(pkgDir, "bin", "ex-product.js")).APP_VERSION;
 }
 
 function killWindowsProcessTree(pid) {
-  const result = spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { encoding: "utf8" });
+  const result = spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { encoding: "utf8", windowsHide: true, shell: false });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || `taskkill exited ${result.status}`).trim());
 }
@@ -104,7 +104,7 @@ async function runCommand(options, {
         check: options.check,
         currentVersion: getPackageVersion(pkgDir),
         pkgDir,
-        listRecords: list,
+        listRecords: () => records.listRunRecords(runDir, { isOurs, requireAnswer: false }),
         formatRecord: records.formatRunRecord,
         log,
         error,

@@ -1,6 +1,25 @@
+<img align="right" src="./ex-badge.svg" alt="Pi Web Ex" width="76" />
+
 # Pi Web Ex
 
-本库基于 [Pi Web](https://github.com/agegr/pi-web)，新增了以下能力：
+Pi coding agent 的浏览器界面。Ex 版增加了可见可停的后台任务、插件配置面板和更易用的输入框命令搜索。
+
+## 开始使用
+
+当前源码对应 **0.19.0+1.0.0**（上游 + fork）。需要 Node.js 22.19.0 或更新版本：
+
+~~~sh
+git clone https://github.com/williamxhero/pi-web-ex.git
+cd pi-web-ex
+npm ci
+npm run dev
+~~~
+
+打开 <http://127.0.0.1:30141>。产品发布、下载与更新统一走 [Pi Web Ex Releases](https://github.com/williamxhero/pi-web-ex/releases)；正式首发前请使用上述源码方式。已发布后可下载其中的 `pi-web-ex.tgz`，再运行 `npm install -g ./pi-web-ex.tgz`。原来安装上游包的用户请先停止旧服务并卸载旧包，再安装 Ex；不需要删除 Pi 会话或配置目录。
+
+网页只自动检查，不下载或安装。使用发布包时，`pi-web update --check` 只查版本，手动运行 `pi-web update` 才安装 Ex 新版；不会安装上游包。更多见[发布说明](docs/release.md)和[容器使用](docs/docker.md)。问题请提交到 [Ex Issues](https://github.com/williamxhero/pi-web-ex/issues)。
+
+## Fork 功能
 
 | 功能 | 使用方式 |
 | --- | --- |
@@ -15,4 +34,6 @@
 
 自动续跑的监督逻辑由独立插件提供，本库负责显示状态和转发按钮操作。
 
-Pi Web 的安装、配置和基础功能见[上游中文 README](https://github.com/williamxhero/pi-web-ex/blob/main/docs/README.zh-CN.md)。
+## 来源与文档
+
+本项目基于 [Pi Web](https://github.com/agegr/pi-web)，保留原许可证与署名。原版基础功能见[上游中文说明归档](https://github.com/williamxhero/pi-web-ex/blob/main/docs/README.zh-CN.md)；安装和更新以本页为准。

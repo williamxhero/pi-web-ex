@@ -1,54 +1,63 @@
-name: Release
-
-# Publishes a pushed v* tag: @agegr/pi-web to npm and the Docker image to GHCR.
-# npm uses Trusted Publishing (OIDC): no npm token. The package's Trusted
-# Publisher on npmjs.com names this repository and this file (publish.yml), so
-# keep its name.
-
+name: Pi Web Ex Release
 on:
   push:
     tags: ["v*"]
-
 permissions:
   contents: read
-
 concurrency:
-  group: release-${{ github.ref }}
+  group: ex-release-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
   check-tag:
+    if: github.repository == 'williamxhero/pi-web-ex'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check the tag matches package.json
-        run: |
-          version=$(node -p "require('./package.json').version")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version"
-            exit 1
-          fi
-
-  npm:
-    needs: check-tag
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      id-token: write
+    outputs:
+      container-version: ${{ steps.version.outputs.container-version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          # Trusted Publishing needs npm 11.5.1 or later; Node 24 bundles it.
-          node-version: 24
-          registry-url: https://registry.npmjs.org
+          node-version: 22.19.0
+      - id: version
+        run: |
+          expected=$(node -p '"v" + require("./bin/ex-product").APP_VERSION')
+          test "$GITHUB_REF_NAME" = "$expected"
+          echo "container-version=$(node -p 'require("./bin/ex-product").CONTAINER_VERSION')" >> "$GITHUB_OUTPUT"
+  package:
+    needs: check-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npm publish --access public
-
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+      - run: npm run release:pack
+      - name: Smoke test the installed release package
+        run: |
+          prefix=$(mktemp -d)
+          export PI_CODING_AGENT_DIR="$prefix/agent" PI_WEB_SKIP_VERSION_CHECK=1
+          npm install --global --prefix "$prefix" --no-audit --no-fund "$PWD/dist-release/pi-web-ex.tgz"
+          test "$("$prefix/bin/pi-web" --version)" = "$(node -p 'require("./bin/ex-product").APP_VERSION')"
+          "$prefix/bin/pi-web" --no-open --hostname 127.0.0.1 --port 30147 > "$prefix/server.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; cat "$prefix/server.log"' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS --max-time 3 http://127.0.0.1:30147/manifest.webmanifest -o "$prefix/manifest.json"; then break; fi
+            sleep 1
+          done
+          node -e 'if (require(process.argv[1]).name !== "Pi Web Ex") process.exit(1)' "$prefix/manifest.json"
+          curl -fsS --max-time 15 http://127.0.0.1:30147/ -o /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pi-web-ex-tarball
+          path: dist-release/pi-web-ex.tgz
+          if-no-files-found: error
   container:
     needs: check-tag
     runs-on: ubuntu-latest
@@ -58,36 +67,39 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-
       - uses: docker/setup-qemu-action@v3
-
       - uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker image metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          # `latest` follows the newest release tag (the action's default for semver tags).
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ghcr.io/williamxhero/pi-web-ex:${{ needs.check-tag.outputs.container-version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Verify the pushed image manifest
+        run: docker buildx imagetools inspect "$EX_IMAGE"
+        env:
+          EX_IMAGE: ghcr.io/williamxhero/pi-web-ex:${{ needs.check-tag.outputs.container-version }}
+  publish:
+    needs: [package, container]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pi-web-ex-tarball
+      - name: Validate and publish complete Ex release
+        run: |
+          test -s pi-web-ex.tgz
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "Pi Web Ex ${GITHUB_REF_NAME#v}" --generate-notes pi-web-ex.tgz
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | any(.name == "pi-web-ex.tgz")' | grep -qx true
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

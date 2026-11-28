@@ -1052,16 +1052,13 @@ a.session-tree-main {
   font-weight: 400;
 }
 
-/* With the files below the sessions there is no tab to choose: the brand
-   stands where the tabs were (PiWebTitle), the panel's typographic anchor,
-   as on the old sidebar. Not a cell: no box, no line on its right; its text
-   in the chevron column (6px in plus a header toggle's 5px). A click shows
-   the versions in the accent for a few seconds. Never cut: New's label
-   gives way first, and on a row too narrow for the versions they take the
-   sidebar's meta size (data-fit 2, which only they reach: "Pi Web" fits
-   beside the three cells at the sidebar's 180px minimum; at 11px the
-   versions need 212px, and narrower they push Sort by date past the edge
-   for the few seconds they show). */
+/* Keep the version card out of the toolbar flow; compact only the wordmark. */
+.sidebar-brand-anchor {
+  position: relative;
+  flex: none;
+  align-self: center;
+}
+
 .sidebar-brand {
   flex: none;
   align-self: center;
@@ -1079,11 +1076,29 @@ a.session-tree-main {
   line-height: normal;
   text-align: left;
   white-space: nowrap;
-  cursor: default;
+  cursor: pointer;
 }
 
-.sidebar-brand.is-version {
-  color: var(--accent);
+.sidebar-brand-compact { display: none; }
+.sidebar-header[data-fit="2"] .sidebar-brand { min-width: 0; }
+.sidebar-header[data-fit="2"] .sidebar-brand-full { display: none; }
+.sidebar-header[data-fit="2"] .sidebar-brand-compact { display: inline; }
+
+.sidebar-version-card {
+  display: grid;
+  gap: 5px;
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 8px);
+  left: 7px;
+  width: max-content;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text);
+  box-shadow: 0 8px 22px #0003;
+  font-size: 12px;
 }
 
 .sidebar-brand:focus {
@@ -1132,10 +1147,6 @@ a.session-tree-main {
 
 .sidebar-header[data-fit="2"] .sidebar-tab {
   padding: 0 11px;
-}
-
-.sidebar-header[data-fit="2"] .sidebar-brand {
-  font-size: 11px;
 }
 
 .sidebar-header[data-fit="1"] .sidebar-new-label,

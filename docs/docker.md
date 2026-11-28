@@ -1,6 +1,6 @@
-# Running Pi Web in Docker
+# Running Pi Web Ex in Docker
 
-This project ships a production image and a Compose example. The image runs as the unprivileged `node` user, listens on port `30141` inside the container, and includes `bash` and `git` for Pi Web's terminal, shell, and Git features. The application itself does not require a Docker-specific environment variable to start; the image supplies its container bind address and port. The Compose example requires a password so the high-privilege UI is not accidentally exposed without authentication.
+This project ships a production image and a Compose example. The image runs as the unprivileged `node` user, listens on port `30141` inside the container, and includes `bash` and `git` for Pi Web Ex's terminal, shell, and Git features. The application itself does not require a Docker-specific environment variable to start; the image supplies its container bind address and port. The Compose example requires a password so the high-privilege UI is not accidentally exposed without authentication.
 
 ## Start with Compose
 
@@ -21,7 +21,7 @@ The equivalent Podman command is `podman compose up --build -d` when the Compose
 
 | Container path | Compose example | Why it is used |
 | --- | --- | --- |
-| `/home/node/.pi/agent` | Named volume `pi-agent-data` | **The primary persistent data mount.** This is Pi's default agent directory because the image sets `HOME=/home/node`. It holds sessions/transcripts, model and provider configuration/credentials, extensions and packages, MCP settings/auth, and Pi Web's own agent-scoped state. It must be writable. |
+| `/home/node/.pi/agent` | Named volume `pi-agent-data` | **The primary persistent data mount.** This is Pi's default agent directory because the image sets `HOME=/home/node`. It holds sessions/transcripts, model and provider configuration/credentials, extensions and packages, MCP settings/auth, and Pi Web Ex's own agent-scoped state. It must be writable. |
 | `/home/node/pi-cwd` | Named volume `pi-cwd-data` | Persists the default new-session directories (`~/pi-cwd/YYYYMMDD`) and files created there. |
 | `/workspace` | Bind mount from `WORKSPACE_DIR` | Project files the agent should browse, edit, and run commands in. It must be writable for normal coding use. |
 
@@ -31,7 +31,7 @@ The named agent volume is initialized automatically and persists across containe
       - ${HOME}/.pi/agent:/home/node/.pi/agent
 ```
 
-That bind mount is read/write because Pi Web updates settings, credentials, session data, and other files there. Ensure the container's `node` user can write to the host directory. Do not mount the host agent directory read-only. It contains sensitive provider credentials and grants Pi Web access to them.
+That bind mount is read/write because Pi Web Ex updates settings, credentials, session data, and other files there. Ensure the container's `node` user can write to the host directory. Do not mount the host agent directory read-only. It contains sensitive provider credentials and grants Pi Web Ex access to them.
 
 Other useful optional mounts, depending on your setup:
 
@@ -61,20 +61,20 @@ The Compose file explicitly sets the following:
 | Variable | Container value / requirement | Purpose |
 | --- | --- | --- |
 | `PORT` | `30141` | Internal HTTP port. Keep the Compose container port in sync if you change it. |
-| `PI_WEB_HOSTNAME` | `0.0.0.0` | Required for access through the container network; Pi Web's normal non-container default is loopback-only. |
+| `PI_WEB_HOSTNAME` | `0.0.0.0` | Required for access through the container network; Pi Web Ex's normal non-container default is loopback-only. |
 | `PI_WEB_NO_OPEN` | `1` | Prevents attempts to open a browser in the container. |
-| `PI_CODING_AGENT_DIR` | `/home/node/.pi/agent` | Explicitly points Pi and Pi Web at the persistent agent mount; normally this defaults to `$HOME/.pi/agent`. |
+| `PI_CODING_AGENT_DIR` | `/home/node/.pi/agent` | Explicitly points Pi and Pi Web Ex at the persistent agent mount; normally this defaults to `$HOME/.pi/agent`. |
 | `PI_WEB_PASSWORD` | Required by the Compose interpolation | Enables browser password login. Use a strong secret. |
-| `PI_WEB_ALLOWED_HOSTS` | Optional, empty by default | Comma-separated, exact proxy/custom hostnames. Set this when a reverse proxy forwards a hostname not otherwise accepted by Pi Web. |
-| `PI_WEB_FRAME_ANCESTORS` | Optional, empty by default | Comma-separated CSP sources of other origins allowed to embed Pi Web in an iframe, for example `https://portal.example`. Unset, only Pi Web's own origin may frame it. |
-| `PI_WEB_SKIP_VERSION_CHECK` | `1` | Disables the Pi Web update check in this deployment. |
+| `PI_WEB_ALLOWED_HOSTS` | Optional, empty by default | Comma-separated, exact proxy/custom hostnames. Set this when a reverse proxy forwards a hostname not otherwise accepted by Pi Web Ex. |
+| `PI_WEB_FRAME_ANCESTORS` | Optional, empty by default | Comma-separated CSP sources of other origins allowed to embed Pi Web Ex in an iframe, for example `https://portal.example`. Unset, only Pi Web Ex's own origin may frame it. |
+| `PI_WEB_SKIP_VERSION_CHECK` | `1` | Disables the Pi Web Ex update check in this deployment. |
 
 There are no model API keys required to start the web server. Configure provider credentials in the Models panel or persist an existing Pi agent directory. Provider API requests still require network access unless using a local provider.
 
 Pass other supported variables through the service's `environment:` section. Compose uses `.env` for interpolation; adding a variable there alone does not pass it into the container. See [Docker's environment variable documentation](https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/). For example, add this entry alongside the existing environment entries in `compose.yaml`:
 
 ```yaml
-      PI_WEB_APP_NAME: ${PI_WEB_APP_NAME:-Pi Web}
+      PI_WEB_APP_NAME: ${PI_WEB_APP_NAME:-Pi Web Ex}
 ```
 
 Then set `PI_WEB_APP_NAME=Work Pi` in `.env` and run `docker compose up -d` to recreate the service with the updated environment. `docker compose restart` retains the container's existing environment. Apply the same explicit mapping for the optional variables below:
@@ -83,7 +83,7 @@ Then set `PI_WEB_APP_NAME=Work Pi` in `.env` and run `docker compose up -d` to r
 - `PI_WEB_IDLE_TIMEOUT_MS`, `PI_WEB_SHUTDOWN_DEADLINE_MS`, `PI_WEB_MCP_IDLE_MS`: session/MCP lifecycle timings.
 - `PI_CODEMODE_MAX_WORKERS`: Pi code-mode worker limit.
 - `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`: outbound proxy configuration.
-- `PI_OFFLINE`: disable online model-catalog, plugin and Pi Web update checks.
+- `PI_OFFLINE`: disable online model-catalog, plugin and Pi Web Ex update checks.
 - `PI_WEB_DISABLE_MCP`: disable MCP integration.
 - `PI_WEB_PUSH_SUBJECT`: optional Web Push VAPID subject.
 - `GITHUB_TOKEN` or `GH_TOKEN`: optional GitHub API token used by skill update checks; `SKILLS_API_URL` overrides the skills service base URL.
@@ -93,9 +93,9 @@ Refer to the Configuration section of the main README for option defaults and va
 
 ## Security notes
 
-Pi Web can invoke tools, run shell commands, edit project files, and access the agent credentials in its mounted agent directory. Treat the service as a trusted local application, not a public website. Compose binds the published port to `127.0.0.1`; for remote access, use a trusted HTTPS reverse proxy or VPN, keep password authentication enabled, and configure `PI_WEB_ALLOWED_HOSTS` for the forwarded hostname. Do not expose plain HTTP to the public internet.
+Pi Web Ex can invoke tools, run shell commands, edit project files, and access the agent credentials in its mounted agent directory. Treat the service as a trusted local application, not a public website. Compose binds the published port to `127.0.0.1`; for remote access, use a trusted HTTPS reverse proxy or VPN, keep password authentication enabled, and configure `PI_WEB_ALLOWED_HOSTS` for the forwarded hostname. Do not expose plain HTTP to the public internet.
 
-The mounted workspace is writable by the agent. Only mount directories you intend Pi Web to access. Keep the writable agent directory and provider credentials private.
+The mounted workspace is writable by the agent. Only mount directories you intend Pi Web Ex to access. Keep the writable agent directory and provider credentials private.
 
 ## Released images
 
@@ -104,5 +104,5 @@ Pushing a `v*` release tag makes the Release workflow (`.github/workflows/publis
 To run a released image instead of building one, replace the `build:` section in `compose.yaml` with:
 
 ```yaml
-    image: ghcr.io/agegr/pi-web:latest
+    image: ghcr.io/williamxhero/pi-web-ex:0.19.0-ex.1.0.0
 ```

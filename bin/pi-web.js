@@ -94,7 +94,7 @@ function startServer({ port, hostname, openBrowser }) {
   const passwordEnabled = Boolean(process.env.PI_WEB_PASSWORD);
 
   if (!fs.existsSync(nextDir)) {
-    console.error("Build artifacts not found. Please report this issue.");
+    console.error("Pi Web Ex build artifacts not found. Install a release or report the issue at https://github.com/williamxhero/pi-web-ex/issues.");
     process.exit(1);
   }
 
@@ -125,12 +125,14 @@ function startServer({ port, hostname, openBrowser }) {
   // and path-with-spaces problems on Windows when shell: true is used.
   const child = spawn(process.execPath, getNextNodeArgs(nextBin, nextArgs), {
     cwd: pkgDir,
+    windowsHide: true,
+    shell: false,
     stdio: ["inherit", "pipe", "inherit"],
     env: { ...process.env, PI_WEB_HOSTNAME: hostname },
   });
   wireChildProcessLifecycle(child);
 
-  // Port 0 lets the OS pick a port we never learn, so such a server gets no record.
+  // Record the process even during startup and on port 0 so update can see it.
   const runRecord = createRunRecordTracker({
     dir: getRunDir,
     record: {
@@ -143,6 +145,7 @@ function startServer({ port, hostname, openBrowser }) {
       startedAt: new Date().toISOString(),
     },
   });
+  if (child.pid) runRecord.markReady();
 
   let serverReady = false;
   const url = getOpenUrl(hostname, port);
@@ -156,9 +159,6 @@ function startServer({ port, hostname, openBrowser }) {
     if (!serverReady && text.includes("Ready")) {
       serverReady = true;
       if (reachable) process.stdout.write(`${reachable}\n`);
-      // The record needs no wait: status, stop and open list a record only
-      // once its URL answers. The browser waits for the first page.
-      if (port !== "0") runRecord.markReady();
       if (openBrowser) openWhenServing({ hostname, port, url });
     }
   });

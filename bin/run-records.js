@@ -154,6 +154,7 @@ async function listRunRecords(dir, {
   isAlive = isProcessAlive,
   isOurs = isRecordProcess,
   isAnswering = isServerAnswering,
+  requireAnswer = true,
 } = {}) {
   let names;
   try {
@@ -179,8 +180,10 @@ async function listRunRecords(dir, {
       fs.rmSync(file, { force: true });
     }
   }
+  candidates.sort((a, b) => a.port - b.port);
+  if (!requireAnswer) return candidates;
   const answering = await Promise.all(candidates.map((record) => isAnswering(record.url)));
-  return candidates.filter((_, index) => answering[index]).sort((a, b) => a.port - b.port);
+  return candidates.filter((_, index) => answering[index]);
 }
 
 // The --port rule shared by stop and open.
@@ -203,7 +206,7 @@ function formatRunRecord(record) {
   return `  ${record.url}  ${pid}  v${record.version}  started ${record.startedAt}`;
 }
 
-// Writes the record once the server is ready and removes it when the launcher
+// Writes the process record on request and removes it when the launcher
 // exits. A failed write only warns: the server keeps running without a record.
 // `dir` may be a function, so a failing home lookup is caught here too.
 function createRunRecordTracker({ dir, record, parentProcess = process, warn = console.warn }) {

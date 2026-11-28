@@ -1,28 +1,17 @@
-const STABLE_VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/;
+import { APP_VERSION, fetchLatestExRelease, isNewerExVersion } from "../bin/ex-product";
+import type { AppUpdateResponse } from "./api-types";
 
-function parseStableVersion(version: string): [number, number, number] | null {
-  const match = STABLE_VERSION_PATTERN.exec(version);
-  if (!match) return null;
-
-  const parts = match.slice(1).map(Number);
-  if (parts.some((part) => !Number.isSafeInteger(part))) return null;
-  return parts as [number, number, number];
+export function noAppUpdate(): AppUpdateResponse {
+  return { currentVersion: APP_VERSION, latestVersion: APP_VERSION, updateAvailable: false, releaseUrl: "" };
 }
 
-export function isNewerStableVersion(candidate: string, current: string): boolean {
-  const candidateParts = parseStableVersion(candidate);
-  const currentParts = parseStableVersion(current);
-  if (!candidateParts || !currentParts) return false;
-
-  for (let index = 0; index < candidateParts.length; index += 1) {
-    if (candidateParts[index] !== currentParts[index]) {
-      return candidateParts[index] > currentParts[index];
-    }
-  }
-  return false;
-}
-
-export function getPiWebReleaseUrl(version: string): string | null {
-  if (!parseStableVersion(version)) return null;
-  return `https://github.com/agegr/pi-web/releases/tag/v${version}`;
+export async function getAppUpdate(request?: typeof fetch): Promise<AppUpdateResponse> {
+  const release = await fetchLatestExRelease(request);
+  if (!release) return noAppUpdate();
+  return {
+    currentVersion: APP_VERSION,
+    latestVersion: release.version,
+    updateAvailable: Boolean(release.assetUrl) && isNewerExVersion(release.version, APP_VERSION),
+    releaseUrl: release.url,
+  };
 }

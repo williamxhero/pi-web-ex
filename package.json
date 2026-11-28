@@ -1,14 +1,14 @@
 {
-  "name": "@agegr/pi-web",
+  "name": "@williamxhero/pi-web-ex",
   "version": "0.19.0",
-  "description": "Web UI for the pi coding agent",
-  "homepage": "https://github.com/agegr/pi-web#readme",
+  "description": "Pi Web Ex, a browser UI for the Pi coding agent",
+  "homepage": "https://github.com/williamxhero/pi-web-ex#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/agegr/pi-web.git"
+    "url": "git+https://github.com/williamxhero/pi-web-ex.git"
   },
   "bugs": {
-    "url": "https://github.com/agegr/pi-web/issues"
+    "url": "https://github.com/williamxhero/pi-web-ex/issues"
   },
   "license": "MIT",
   "engines": {
@@ -33,6 +33,7 @@
     "plugin-configs",
     "public",
     "next.config.ts",
+    "fork-version.json",
     "package.json"
   ],
   "scripts": {
@@ -46,7 +47,7 @@
     "test:terminal": "node e2e/terminal.mjs",
     "test:e2e": "node e2e/run.mjs",
     "test": "node --experimental-strip-types --test \"app/**/*.test.mjs\" \"components/**/*.test.mjs\" \"hooks/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"public/**/*.test.mjs\"",
-    "release": "npm version patch -m \"Release v%s\""
+    "release:pack": "node scripts/pack-ex-release.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.6.1",

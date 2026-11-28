@@ -10,7 +10,7 @@ RUN npm ci --ignore-scripts
 
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+RUN NODE_OPTIONS=--max-old-space-size=8192 npm run build
 # What the npm package holds, as `files` in package.json: no build cache, no dev dependencies.
 RUN rm -rf .next/cache && find .next -name '*.js.map' -delete && npm prune --omit=dev
 
@@ -33,7 +33,8 @@ COPY --from=build --chown=node:node /app/bin ./bin
 COPY --from=build --chown=node:node /app/.next ./.next
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/public ./public
-COPY --from=build --chown=node:node /app/next.config.ts /app/package.json ./
+COPY --from=build --chown=node:node /app/next.config.ts /app/package.json /app/fork-version.json ./
+COPY --from=build --chown=node:node /app/plugin-configs ./plugin-configs
 USER node
 
 EXPOSE 30141

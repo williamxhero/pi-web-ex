@@ -507,13 +507,10 @@ export function handOffDisabledKeyFocus(doc: FocusDocument, key: Element, fallba
 /**
  * How much of the toolbar row's labels fit (`data-fit`, app/sidebar.css):
  * all (0), New's + alone (1), then the tabs' icons alone, or below the
- * sessions the brand's versions in a smaller type (2): the brand itself is
- * never cut. Measured, not a fixed width, since the labels' widths change
- * with the language; on the row itself, before paint, again whenever it
- * resizes or `labels` change. The returned fit is for what the row's size
- * does not show: the brand's text changing its width.
+ * sessions the compact brand (2). Measured since labels vary by language,
+ * before paint and again whenever the row resizes or its labels change.
  */
-function useHeaderFit(ref: RefObject<HTMLElement | null>, labels: string): () => void {
+function useHeaderFit(ref: RefObject<HTMLElement | null>, labels: string): void {
   const fit = useCallback(() => {
     const header = ref.current;
     if (!header) return;
@@ -530,7 +527,6 @@ function useHeaderFit(ref: RefObject<HTMLElement | null>, labels: string): () =>
     observer.observe(header);
     return () => observer.disconnect();
   }, [ref, fit, labels]);
-  return fit;
 }
 
 /**
@@ -3058,9 +3054,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
   // files tab, nor under the archive view.
   const listModePressed = listMode === "recent" && sessionsShown && !archiveView;
   // What the toolbar row's widths depend on: New's label, and the tabs (the
-  // chosen tab's label is bolder, the files tab carries the count). The
-  // brand's text reports its own changes (fitHeader).
-  const fitHeader = useHeaderFit(headerRef, (stacked
+  // chosen tab's label is bolder, the files tab carries the count).
+  useHeaderFit(headerRef, (stacked
     ? ["below", t("sidebar.new")]
     : ["tabs", t("sidebar.tabSessions"), t("sidebar.tabFiles"), t("sidebar.new"), explorerCwd && changesCount > 0 ? changesCount : "", sidebarTab]
   ).join("\n"));
@@ -3199,7 +3194,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
           there (the panel's anchor, the versions on a click), and the
           search is the sessions'. */}
       <div ref={headerRef} className="sidebar-header">
-        {stacked && <PiWebTitle onWidthChange={fitHeader} />}
+        {stacked && <PiWebTitle label={t("sidebar.brandLabel")} />}
         {!stacked && (
           <div className="sidebar-tabs-list" role="tablist" aria-label={t("sidebar.tabsLabel")}>
             <button

@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
+
+const { APP_VERSION } = createRequire(import.meta.url)("../bin/ex-product.js") as typeof import("../bin/ex-product");
 
 const configDir = dirname(fileURLToPath(import.meta.url));
 // The demo mirrors the Pi Web release it was copied from, so report the parent
@@ -28,7 +31,7 @@ const nextConfig: NextConfig = {
   // `npm run dev` binds 127.0.0.1; Next 16 treats other hosts as cross-origin.
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   env: {
-    NEXT_PUBLIC_APP_VERSION: parentPackage.version,
+    NEXT_PUBLIC_APP_VERSION: APP_VERSION,
     NEXT_PUBLIC_PI_VERSION: piVersion,
     NEXT_PUBLIC_BASE_PATH: basePath,
   },

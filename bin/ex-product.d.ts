@@ -1,0 +1,14 @@
+export const PRODUCT_NAME: string;
+export const EX_REPOSITORY: string;
+export const EX_PACKAGE: string;
+export const RELEASE_ASSET_NAME: string;
+export const UPSTREAM_VERSION: string;
+export const FORK_VERSION: string;
+export const APP_VERSION: string;
+export const CONTAINER_VERSION: string;
+export const REPO_URL: string;
+export const RELEASES_URL: string;
+export type ExRelease = { version: string; url: string; assetUrl: string | null };
+export function isNewerExVersion(candidate: string, current: string): boolean;
+export function exReleaseUrl(version: string): string | null;
+export function fetchLatestExRelease(request?: typeof fetch, timeoutMs?: number): Promise<ExRelease | null>;
