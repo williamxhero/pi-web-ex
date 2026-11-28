@@ -191,7 +191,7 @@ function outcomeRefusal(outcome: McpEnabledOutcome<"web-password">, path: string
     case "not-an-object":
       return new Refusal(409, "entry-not-object", `${path} defines MCP server "${name}" as something other than an object, so it has nothing to switch`, { path, name });
     case "refused":
-      return new Refusal(409, "web-password", `"${name}" references PI_WEB_PASSWORD, so Pi Web does not turn it on`, { name });
+      return new Refusal(409, "web-password", `"${name}" references PI_WEB_PASSWORD, so Pi Web Ex does not turn it on`, { name });
     default:
       return undefined;
   }
@@ -271,7 +271,7 @@ async function switchServerInProject(
   const global = readMcpServerConfig({ agentDir, internals, scope: "global", name });
   if (typeof global === "string") return mcpRefusalResponse(409, "server-invalid", global, { name });
   if (enabled && findWebPasswordField(global.config, internals)) {
-    return mcpRefusalResponse(409, "web-password", `"${name}" references PI_WEB_PASSWORD, so Pi Web does not turn it on`, { name });
+    return mcpRefusalResponse(409, "web-password", `"${name}" references PI_WEB_PASSWORD, so Pi Web Ex does not turn it on`, { name });
   }
   try {
     const { value: outcome, path } = await setMcpServerEnabledInProject(target, name, enabled);

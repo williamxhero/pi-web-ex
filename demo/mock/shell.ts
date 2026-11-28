@@ -6,6 +6,7 @@
 import { currentDemoLocale } from "./locale";
 import { listDirectory, lookup, readFileText } from "./files";
 import { changedFiles } from "./git";
+import { DEMO_INSTALL_GUIDE } from "./product";
 import { HOME, PROJECT_BRANCH, PROJECT_ROOT } from "./paths";
 
 export interface ShellResult {
@@ -42,8 +43,8 @@ function notAvailable(command: string): ShellResult {
   const zh = currentDemoLocale() === "zh";
   return {
     output: zh
-      ? `${command}: 这是 Pi Web Ex 的静态演示，没有真实的 shell。\n可以试试：ls、pwd、cat <文件>、git status、git log、git branch、node -v、date、echo、help\n运行真实版本：https://github.com/williamxhero/pi-web-ex#readme`
-      : `${command}: this is a static Pi Web Ex demo, so there is no real shell.\nTry: ls, pwd, cat <file>, git status, git log, git branch, node -v, date, echo, help\nRun the real thing: https://github.com/williamxhero/pi-web-ex#readme`,
+      ? `${command}: 这是 Pi Web Ex 的静态演示，没有真实的 shell。\n可以试试：ls、pwd、cat <文件>、git status、git log、git branch、node -v、date、echo、help\nEx 安装说明：${DEMO_INSTALL_GUIDE}`
+      : `${command}: this is a static Pi Web Ex demo, so there is no real shell.\nTry: ls, pwd, cat <file>, git status, git log, git branch, node -v, date, echo, help\nEx installation guide: ${DEMO_INSTALL_GUIDE}`,
     exitCode: 127,
   };
 }

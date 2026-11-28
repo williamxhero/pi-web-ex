@@ -186,7 +186,7 @@ export function prepareMcpAdd(
   const validated = internals.validateMcpServerConfig(name, filled.config);
   if (typeof validated === "string") return { ok: false, status: 409, reason: "server-invalid", error: validated, name };
   if (findWebPasswordField(filled.config, internals)) {
-    return { ok: false, status: 409, reason: "web-password", error: `"${name}" references PI_WEB_PASSWORD, so Pi Web does not add it`, name };
+    return { ok: false, status: 409, reason: "web-password", error: `"${name}" references PI_WEB_PASSWORD, so Pi Web Ex does not add it`, name };
   }
   if (request.scope === "project" && filled.secretPaths.length > 0) {
     return {
@@ -207,7 +207,7 @@ export function prepareMcpAdd(
         ok: false,
         status: 409,
         reason: "host-env-confirm",
-        error: `"${name}" would send these variables of the Pi Web host to its server: ${names.join(", ")}`,
+        error: `"${name}" would send these variables of the Pi Web Ex host to its server: ${names.join(", ")}`,
         name,
         names,
       };

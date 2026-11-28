@@ -99,7 +99,7 @@ The mounted workspace is writable by the agent. Only mount directories you inten
 
 ## Released images
 
-Pushing a `v*` release tag makes the Release workflow (`.github/workflows/publish.yml`) publish `linux/amd64` and `linux/arm64` images to GHCR, next to the npm package: `ghcr.io/agegr/pi-web:<version>`, `:<major>.<minor>` and `:latest`. It uses the built-in `GITHUB_TOKEN`, so no registry secret is needed.
+The Ex release workflow publishes `linux/amd64` and `linux/arm64` images to `ghcr.io/williamxhero/pi-web-ex`. The exact Git tag `v<upstream>+<fork>` maps to the image tag `<upstream>-ex.<fork>` because OCI tags cannot contain `+`. The workflow does not publish `latest` or short `major.minor` aliases. Wait for the corresponding [Ex Release](https://github.com/williamxhero/pi-web-ex/releases) before pulling the image.
 
 To run a released image instead of building one, replace the `build:` section in `compose.yaml` with:
 

@@ -19,13 +19,7 @@ export const metadata: Metadata = {
   description: "Pi Web Ex interface for the pi coding agent",
   applicationName: "Pi Web Ex",
   icons: {
-    icon: [
-      {
-        url: "/icons/icon-192.png",
-        sizes: "192x192",
-        type: "image/png",
-      },
-    ],
+    // app/favicon.ico supplies the browser tab icon with its native small frames.
     apple: [
       {
         url: "/icons/apple-touch-icon.png",

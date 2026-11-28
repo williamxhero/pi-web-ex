@@ -685,7 +685,7 @@ export function createSubagentController(
 ): SubagentController {
   async function start(request: StartSubagentRequest): Promise<SubagentExecution> {
     const enabled = dependencies.isBuiltInSubagentsEnabled ?? isBuiltInSubagentsEnabled;
-    if (!enabled()) throw new Error("Pi Web built-in sub-agents are disabled");
+    if (!enabled()) throw new Error("Pi Web Ex built-in sub-agents are disabled");
     const parentSessionId = request.parentContext.sessionManager.getSessionId();
     const parent = dependencies.getSession(parentSessionId);
     if (!parent?.isAlive()) throw new Error("Parent session is no longer available");
@@ -1119,7 +1119,7 @@ export function createSubagentController(
 
   async function resumeReserved(request: ResumeSubagentRequest): Promise<SubagentExecution> {
     const enabled = dependencies.isBuiltInSubagentsEnabled ?? isBuiltInSubagentsEnabled;
-    if (!enabled()) throw new Error("Pi Web built-in sub-agents are disabled");
+    if (!enabled()) throw new Error("Pi Web Ex built-in sub-agents are disabled");
     const parentSessionId = request.parentContext.sessionManager.getSessionId();
     const existing = await get(request.sessionId);
     if (!existing) throw new Error(`Subagent not found: ${request.sessionId}`);

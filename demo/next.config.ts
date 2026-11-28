@@ -4,11 +4,10 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 
-const { APP_VERSION } = createRequire(import.meta.url)("../bin/ex-product.js") as typeof import("../bin/ex-product");
+const { APP_VERSION, REPO_URL, exReleaseUrl } = createRequire(import.meta.url)("../bin/ex-product.js") as typeof import("../bin/ex-product");
 
 const configDir = dirname(fileURLToPath(import.meta.url));
-// The demo mirrors the Pi Web release it was copied from, so report the parent
-// package's versions in the UI (About / update checks).
+// Use the fork's product version and pinned SDK version in the demo.
 const parentPackage = JSON.parse(readFileSync(join(configDir, "../package.json"), "utf8")) as {
   version: string;
   dependencies?: Record<string, string>;
@@ -32,6 +31,9 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   env: {
     NEXT_PUBLIC_APP_VERSION: APP_VERSION,
+    NEXT_PUBLIC_EX_REPO_URL: REPO_URL,
+    NEXT_PUBLIC_EX_RELEASE_URL: exReleaseUrl(APP_VERSION)!,
+    NEXT_PUBLIC_EX_VERSION: APP_VERSION,
     NEXT_PUBLIC_PI_VERSION: piVersion,
     NEXT_PUBLIC_BASE_PATH: basePath,
   },

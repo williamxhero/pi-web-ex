@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 // The id is a random UUID that only the start's answer carries. The entry was
 // checked when the sign-in started; nothing here connects or reads a file.
 
-const UNKNOWN = "No sign-in has that id: it ended over a minute ago, or Pi Web restarted";
+const UNKNOWN = "No sign-in has that id: it ended over a minute ago, or Pi Web Ex restarted";
 
 type Context = { params: Promise<{ flowId: string }> };
 

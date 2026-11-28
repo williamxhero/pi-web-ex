@@ -605,7 +605,7 @@ export type McpSignInPasteResult =
  */
 export function pasteMcpSignInRedirect(flowId: string, input: unknown): McpSignInPasteResult {
   const flow = registry().flows.get(flowId);
-  if (!flow) return { ok: false, status: 404, reason: "sign-in-unknown", error: "No sign-in has that id: it ended over a minute ago, or Pi Web restarted" };
+  if (!flow) return { ok: false, status: 404, reason: "sign-in-unknown", error: "No sign-in has that id: it ended over a minute ago, or Pi Web Ex restarted" };
   const refuse = (status: number, reason: McpRefusalReason, error: string): McpSignInPasteResult => ({ ok: false, status, reason, error, flow: describeFlow(flow) });
   if (typeof input !== "string" || !input.trim() || input.length > MCP_SIGN_IN_MAX_PASTE_CHARS) {
     return refuse(400, "invalid-request", `redirectUrl must be the redirected address, at most ${MCP_SIGN_IN_MAX_PASTE_CHARS} characters`);

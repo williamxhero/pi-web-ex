@@ -10,6 +10,7 @@ import { delay } from "./http";
 import { readProjectText } from "./files";
 import { PROJECT_ROOT } from "./paths";
 import { SYSTEM_PROMPT_TEMPLATE } from "./system-prompt";
+import { DEMO_INSTALL_GUIDE } from "./product";
 import toolsCatalog from "./captured/tools.json";
 import commandsCatalog from "./captured/commands.json";
 import { DEFAULT_MODEL, DEFAULT_THINKING_LEVEL, MODEL_API, contextWindowFor, modelExists } from "./data/models";
@@ -426,8 +427,8 @@ export async function runAgentCommand(session: MockSession, command: Record<stri
     case "compact": {
       const tokensBefore = lastAssistantUsage(session) ?? 12_000;
       const summary = currentDemoLocale() === "zh"
-        ? "## 目标\n通过对话熟悉 Pi Web Ex 的界面和功能。\n\n## 进展\n- 已浏览会话列表、文件浏览器和模型设置\n- 已了解分支、工具调用和斜杠命令\n\n## 下一步\n- 继续在演示中探索，或运行 `https://github.com/williamxhero/pi-web-ex#readme` 连接真实的 pi agent"
-        : "## Goal\nLearn Pi Web Ex's layout and features through conversation.\n\n## Progress\n- Toured the session list, file explorer and model settings\n- Covered branching, tool calls and slash commands\n\n## Next steps\n- Keep exploring the demo, or run `https://github.com/williamxhero/pi-web-ex#readme` to connect a real pi agent";
+        ? "## 目标\n通过对话熟悉 Pi Web Ex 的界面和功能。\n\n## 进展\n- 已浏览会话列表、文件浏览器和模型设置\n- 已了解分支、工具调用和斜杠命令\n\n## 下一步\n- 继续在演示中探索，或查看 [Ex 安装说明](" + DEMO_INSTALL_GUIDE + ") 连接真实的 pi agent"
+        : "## Goal\nLearn Pi Web Ex's layout and features through conversation.\n\n## Progress\n- Toured the session list, file explorer and model settings\n- Covered branching, tool calls and slash commands\n\n## Next steps\n- Keep exploring the demo, or follow the [Ex installation guide](" + DEMO_INSTALL_GUIDE + ") to connect a real pi agent";
       appendEntry(session, { type: "compaction", summary, firstKeptEntryId: session.leafId ?? "", tokensBefore });
       return ok({ tokensBefore, estimatedTokensAfter: 9_400 + estimateTokens(summary) });
     }

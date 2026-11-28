@@ -136,9 +136,9 @@ export async function validateMcpProject(value: unknown): Promise<McpRequestProj
  * still works. `doing` ends the operator's message ("so Pi Web …").
  */
 export async function mcpInternalsOrRefusal(doing: string): Promise<PiSdkInternals | McpEntryRefusal> {
-  if (isMcpDisabledByOperator()) return mcpEntryRefusal(409, "mcp-off", `${MCP_DISABLE_VARIABLE} is set, so Pi Web ${doing}`);
+  if (isMcpDisabledByOperator()) return mcpEntryRefusal(409, "mcp-off", `${MCP_DISABLE_VARIABLE} is set, so Pi Web Ex ${doing}`);
   const internals = await loadPiSdkInternals();
-  if (!internals.ok) return mcpEntryRefusal(409, "mcp-off", `Pi Web cannot load the SDK's MCP modules: ${internals.reason}`);
+  if (!internals.ok) return mcpEntryRefusal(409, "mcp-off", `Pi Web Ex cannot load the SDK's MCP modules: ${internals.reason}`);
   return internals;
 }
 
@@ -161,7 +161,7 @@ export function readMcpScope(value: unknown): McpScope | undefined {
 export function mcpProjectTrustRefusal(
   cwd: string,
   agentDir: string,
-  untrustedMessage = "The project is not trusted, so Pi Web does not start its MCP servers",
+  untrustedMessage = "The project is not trusted, so Pi Web Ex does not start its MCP servers",
 ): McpEntryRefusal | undefined {
   try {
     const status = getProjectTrustStatus(cwd, agentDir);
@@ -231,7 +231,7 @@ export async function readConnectableMcpEntry(req: Request): Promise<McpConnecta
     if (typeof resolved === "string") return mcpEntryRefusal(409, "server-invalid", resolved, { name });
     const { config, configKey } = resolved;
     if (findWebPasswordField(config, internals)) {
-      return mcpEntryRefusal(409, "web-password", `"${name}" references PI_WEB_PASSWORD, so Pi Web does not connect it`, { name });
+      return mcpEntryRefusal(409, "web-password", `"${name}" references PI_WEB_PASSWORD, so Pi Web Ex does not connect it`, { name });
     }
     return {
       scope,

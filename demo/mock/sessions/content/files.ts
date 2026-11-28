@@ -1,4 +1,5 @@
 import { PROJECT_ROOT } from "../../paths";
+import { DEMO_INSTALL_GUIDE } from "../../product";
 import { SESSION_IDS } from "../ids";
 import type { SessionScript } from "../types";
 
@@ -40,7 +41,7 @@ export const filesSession: SessionScript = {
 - **Project tools** — file explorer, uploads, Git diffs, previews (Markdown, images, PDF, DOCX…) and Git worktrees.
 - **Web configuration** — provider login, API keys, models, skills and plugins without leaving the browser.
 
-Start it with \`https://github.com/williamxhero/pi-web-ex#readme\`; it listens on \`127.0.0.1:30141\` by default.`,
+Follow the [Ex installation guide](${DEMO_INSTALL_GUIDE}); it listens on \`127.0.0.1:30141\` by default.`,
             zh: `**Pi Web Ex** 是 [pi 编程智能体](https://github.com/earendil-works/pi) 的本地浏览器界面。简单来说：
 
 - **与命令行共享数据**：读写 \`~/.pi/agent\`，会话、模型和凭据都和终端里的 \`pi\` 通用。
@@ -49,7 +50,7 @@ Start it with \`https://github.com/williamxhero/pi-web-ex#readme\`; it listens o
 - **项目工具**：文件浏览器、上传、Git diff、各种预览（Markdown、图片、PDF、DOCX 等）以及 Git worktree。
 - **网页配置**：登录服务商、填写 API Key、管理模型、技能和插件，都不用离开浏览器。
 
-用 \`https://github.com/williamxhero/pi-web-ex#readme\` 启动，默认监听 \`127.0.0.1:30141\`。`,
+按 [Ex 安装说明](${DEMO_INSTALL_GUIDE}) 启动，默认监听 \`127.0.0.1:30141\`。`,
           },
         },
       ],

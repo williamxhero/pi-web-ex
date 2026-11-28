@@ -7,6 +7,7 @@ import { buildEntriesFromFiles, filterFileEntries } from "@/lib/file-fuzzy";
 import { MockEventSource } from "./event-source";
 import { MockRequest, delay, error, json } from "./http";
 import { setRealFetch } from "./runtime";
+import { demoAppUpdate } from "./product";
 import { HOME, PROJECT_ROOT, SCRATCH_ROOT, WORKTREE_BRANCH, WORKTREE_ROOT } from "./paths";
 import { fileMeta, isBinaryPath, listDirectory, lookup, primeAssetLookup, projectFiles, readFileText, textChunk, PROJECT_ROOTS } from "./files";
 import { gitDiff, gitStatus } from "./git";
@@ -232,10 +233,7 @@ const ROUTES: Record<string, Handler> = {
   home: () => json({ home: HOME }),
   "default-cwd": () => json({ cwd: SCRATCH_ROOT }),
   "project-trust": () => json({ requiresTrust: false, trusted: true }),
-  "app-update": () => {
-    const version = process.env.NEXT_PUBLIC_APP_VERSION ?? "0.0.0";
-    return json({ currentVersion: version, latestVersion: version, updateAvailable: false, releaseUrl: `https://github.com/agegr/pi-web/releases/tag/v${version}` });
-  },
+  "app-update": () => json(demoAppUpdate()),
   git: async (request) => {
     const cwd = request.query("cwd") ?? "";
     if (request.segments[2] === "diff") return json(await gitDiff(request.query("path") ?? ""));

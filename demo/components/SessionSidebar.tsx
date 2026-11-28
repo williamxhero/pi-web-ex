@@ -1,6 +1,6 @@
 "use client";
 
-import { PiWebTitle as SharedPiWebTitle } from "../../components/PiWebTitle";
+import { PiWebTitle } from "./PiWebTitle";
 
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
@@ -1031,7 +1031,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         }}
       >
         <div className="demo-brand-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <SharedPiWebTitle />
+          <PiWebTitle />
           <div style={{ display: "flex", gap: 6 }}>
             <button
               onClick={handleNewSession}

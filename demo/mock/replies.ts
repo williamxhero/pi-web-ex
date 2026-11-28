@@ -4,6 +4,7 @@
  * and always explain that this is a static demo.
  */
 import type { DemoLocale } from "./locale";
+import { DEMO_INSTALL_GUIDE } from "./product";
 import { MODELS_RESPONSE } from "./data/models";
 import { buildContext, type MockSession } from "./sessions/store";
 
@@ -21,8 +22,6 @@ export interface ReplyPlan {
   };
 }
 
-const INSTALL = "https://github.com/williamxhero/pi-web-ex#readme";
-
 function modelName(session: MockSession): string {
   const model = session.live?.model;
   if (!model) return "the selected model";
@@ -31,8 +30,8 @@ function modelName(session: MockSession): string {
 
 function footer(locale: DemoLocale): string {
   return locale === "zh"
-    ? `\n\n---\n*这是 Pi Web Ex 的静态演示，回复是预设的，没有连接真实模型。想用你自己的模型完整体验，运行 \`${INSTALL}\`。*`
-    : `\n\n---\n*This is a static Pi Web Ex demo: replies are canned and no model is called. To try it with your own models, run \`${INSTALL}\`.*`;
+    ? `\n\n---\n*这是 Pi Web Ex 的静态演示，回复是预设的，没有连接真实模型。想用你自己的模型完整体验，请看 [Ex 安装说明](${DEMO_INSTALL_GUIDE})。*`
+    : `\n\n---\n*This is a static Pi Web Ex demo: replies are canned and no model is called. To try it with your own models, follow the [Ex installation guide](${DEMO_INSTALL_GUIDE}).*`;
 }
 
 function mentionedPath(prompt: string): string | null {
@@ -106,7 +105,7 @@ export function composeReply(prompt: string, locale: DemoLocale, session: MockSe
     thinking: zh ? "这是演示环境，说明情况并给出可以尝试的操作。" : "This is the demo; explain that and suggest what to explore.",
     text: zh
       ? `收到！在真实的 Pi Web Ex 中，${model} 会在这里流式输出回答，并在需要时读取文件、运行命令、修改代码——每一步都会显示为可展开的工具调用，完成后还会在顶部栏更新 token 和费用。\n\n在这个演示里，你还可以：\n\n- 用 \`@\` 引用一个文件（比如 \`@package.json\`），我会真的读一下它；\n- 输入 \`/\` 查看斜杠命令，或用 \`!ls\` 运行模拟的 shell 命令；\n- 悬停在你的消息上，试试 **从此处编辑** 和 **新会话**。${footer(locale)}`
-      : `Got it! In a real Pi Web session, ${model} would stream its answer here and read files, run commands or edit code as needed — each step shown as an expandable tool call, with tokens and cost updating in the top bar.\n\nIn this demo you can also:\n\n- Mention a file with \`@\` (for example \`@package.json\`) and I'll actually read it.\n- Type \`/\` for slash commands, or \`!ls\` for a simulated shell command.\n- Hover your message and try **Edit from here** or **New session**.${footer(locale)}`,
+      : `Got it! In a real Pi Web Ex session, ${model} would stream its answer here and read files, run commands or edit code as needed — each step shown as an expandable tool call, with tokens and cost updating in the top bar.\n\nIn this demo you can also:\n\n- Mention a file with \`@\` (for example \`@package.json\`) and I'll actually read it.\n- Type \`/\` for slash commands, or \`!ls\` for a simulated shell command.\n- Hover your message and try **Edit from here** or **New session**.${footer(locale)}`,
   };
 }
 

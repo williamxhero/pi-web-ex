@@ -1188,7 +1188,7 @@ export class McpHost {
       const host = this.current;
       const attempt = host?.attemptFor(entry);
       if (!attempt && host?.refuseAbandoned(entry)) {
-        throw new Error(`MCP server "${entry.name}" was removed before it connected, so Pi Web did not start it`);
+        throw new Error(`MCP server "${entry.name}" was removed before it connected, so Pi Web Ex did not start it`);
       }
       let transport: ReturnType<McpTransportFactory>;
       try {

@@ -17,13 +17,7 @@ export const metadata: Metadata = {
   description: "Interactive demo of Pi Web Ex, the browser UI for the pi coding agent",
   applicationName: "Pi Web Ex",
   icons: {
-    icon: [
-      {
-        url: demoAssetPath("/icons/icon-192.png"),
-        sizes: "192x192",
-        type: "image/png",
-      },
-    ],
+    icon: { url: demoAssetPath("/favicon.ico"), type: "image/x-icon" },
     apple: [
       {
         url: demoAssetPath("/icons/apple-touch-icon.png"),

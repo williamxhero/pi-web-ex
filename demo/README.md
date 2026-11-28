@@ -1,7 +1,7 @@
-# Pi Web demo
+# Pi Web Ex demo
 
-A static, backend-free copy of the Pi Web UI for GitHub Pages. It uses the
-real Pi Web components, and an in-browser mock answers every `/api/*` request
+A static, backend-free copy of the Pi Web Ex UI for GitHub Pages. It uses the
+real Pi Web Ex components, and an in-browser mock answers every `/api/*` request
 the UI makes, so visitors can click through sessions, files, models and
 settings without installing anything.
 
@@ -26,18 +26,17 @@ settings without installing anything.
 ## How it works
 
 ```text
-app/DemoRoot.tsx        imports mock/install.ts, then renders Pi Web's AppShell
+app/DemoRoot.tsx        imports mock/install.ts, then renders Pi Web Ex's AppShell
 mock/install.ts         replaces window.fetch (for /api/*) and EventSource
 mock/router.ts          the API routes: sessions, agent, files, git, models, …
 mock/agent.ts           streams replies with pi's SSE event sequence
 mock/sessions/          tutorial scripts, expanded into pi session entries
-mock/captured/          responses recorded from a real Pi Web + pi SDK setup
+mock/captured/          responses recorded from a real Pi Web Ex + pi SDK setup
 scripts/prepare-demo-files.mjs
                         snapshots the repository into public/demo-files
 ```
 
-`components/`, `hooks/` and `lib/` are copies of the main project. These files
-differ from their originals:
+`components/`, `hooks/` and `lib/` are copies of the main project. The demo reads the root release configuration at build time and injects it into the browser mock; runtime modules stay inside `demo/`. These files differ from their originals:
 
 | File | Why |
 | --- | --- |
@@ -50,13 +49,13 @@ differ from their originals:
 To pick up UI changes from the main project, copy the updated files over and
 re-apply the changes above (search for `demo` / `@/mock` in those files).
 
-## Isolation from Pi Web
+## Isolation from Pi Web Ex
 
 The demo never ends up in the app or its npm package:
 
 - **Not published.** The root `package.json` publishes only the paths in its
   `files` whitelist, so `npm pack` contains nothing from `demo/`.
-- **Not compiled into the app.** Pi Web imports nothing from `demo/`; the root
+- **Not compiled into the app.** Pi Web Ex imports nothing from `demo/`; the root
   `tsconfig.json` excludes it and `eslint.config.mjs` ignores it.
 - **Kept out of the app's CSS.** Tailwind scans every file that isn't
   gitignored, so `app/globals.css` has `@source not "../demo";`. The demo's copy
@@ -76,13 +75,13 @@ npm run build    # static export in out/
 
 `npm run dev` and `npm run build` first run `scripts/prepare-demo-files.mjs`.
 To preview the build under a sub-path the way GitHub Pages serves it, set
-`PAGES_BASE_PATH=/pi-web` before `npm run build`.
+`PAGES_BASE_PATH=/pi-web-ex` before `npm run build`.
 
 ## Deployment
 
-`.github/workflows/demo-pages.yml` builds the demo and deploys `out/` to GitHub
-Pages when a push to `main` changes `demo/` or the root `package.json`, so every
-release redeploys it with the new version. The repository snapshot in its file
+`.github/workflows/demo-pages.yml` builds the demo on changes to the demo or
+its shared version and wordmark inputs on `main`. It deploys `out/` to GitHub
+Pages only if the repository variable `PI_WEB_EX_PAGES` is `true`. The repository snapshot in its file
 explorer is taken then too, so it can trail `main` between releases. The
 `github-pages` environment accepts deployments from `main` only; run the
 workflow by hand from `main` to redeploy at other times. Enable Pages once

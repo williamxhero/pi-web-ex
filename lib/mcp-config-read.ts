@@ -217,7 +217,7 @@ export function locateProjectMcpConfig(cwd: string, allowedRoots: Set<string>): 
     return { kind: "missing", path };
   }
   if (!isPathWithinRoots(realPath, resolveRealRoots(allowedRoots))) {
-    return { kind: "refused", path, realPath, reason: "link-outside", error: "a symbolic link outside the folders Pi Web may read" };
+    return { kind: "refused", path, realPath, reason: "link-outside", error: "a symbolic link outside the folders Pi Web Ex may read" };
   }
   return { kind: "found", path, realPath };
 }
@@ -247,7 +247,7 @@ export function projectMcpConfigCreatePath(
     }
   }
   if (!isPathWithinRoots(realDir, resolveRealRoots(allowedRoots))) {
-    return { ok: false, reason: "link-outside", error: "a symbolic link outside the folders Pi Web may read" };
+    return { ok: false, reason: "link-outside", error: "a symbolic link outside the folders Pi Web Ex may read" };
   }
   return { ok: true, realPath: join(realDir, "mcp.json") };
 }
@@ -768,7 +768,7 @@ function mcpAvailability(
     return {
       available: false,
       reason: "internals-unavailable",
-      error: "Pi Web cannot load the SDK's MCP modules",
+      error: "Pi Web Ex cannot load the SDK's MCP modules",
       detail: internals.reason,
     };
   }

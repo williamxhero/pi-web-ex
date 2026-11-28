@@ -2895,7 +2895,7 @@ export class AgentSessionWrapper {
       get theme() { return extensionUiTheme(); },
       getAllThemes: () => [],
       getTheme: () => undefined,
-      setTheme: () => ({ success: false, error: "Theme switching is not supported in Pi Web extension UI yet" }),
+      setTheme: () => ({ success: false, error: "Theme switching is not supported in Pi Web Ex extension UI yet" }),
       getToolsExpanded: () => false,
       setToolsExpanded: () => {},
     };

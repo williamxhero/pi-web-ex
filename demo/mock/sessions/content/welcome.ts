@@ -1,4 +1,5 @@
 import { PROJECT_ROOT } from "../../paths";
+import { DEMO_INSTALL_COMMAND, DEMO_INSTALL_GUIDE } from "../../product";
 import { SESSION_IDS } from "../ids";
 import type { SessionScript } from "../types";
 
@@ -100,10 +101,10 @@ flowchart LR
 4. **Look behind the curtain.** Click **System** or **Tools** in the top bar to see exactly what the model receives.
 5. **Check the settings.** **Models** shows a signed-in ChatGPT (Codex) account, a DeepSeek API key and a custom provider; **Settings** has themes, languages and chat preferences.
 
-> This page is a static demo — the replies are canned. To use Pi Web Ex with your own agent, run:
+> This page is a static demo — the replies are canned. To run Pi Web Ex from source, use the commands below or see the [Ex installation guide](${DEMO_INSTALL_GUIDE}):
 >
 > \`\`\`bash
-> npx @agegr/pi-web@latest
+> ${DEMO_INSTALL_COMMAND.replaceAll("\n", "\n> ")}
 > \`\`\``,
             zh: `推荐一条五分钟的体验路线：
 
@@ -113,10 +114,10 @@ flowchart LR
 4. **看看幕后**：点击顶部栏的 **系统** 或 **工具**，查看模型实际收到的内容。
 5. **打开设置**：**模型** 面板里有已登录的 ChatGPT（Codex）账号、DeepSeek API Key 和一个自定义服务商；**设置** 里可以切换主题、语言和聊天偏好。
 
-> 这是一个静态演示页面，回复都是预设的。想连接你自己的 agent 使用 Pi Web Ex，运行：
+> 这是一个静态演示页面，回复都是预设的。要从源码运行 Pi Web Ex，请执行以下命令，或查看 [Ex 安装说明](${DEMO_INSTALL_GUIDE})：
 >
 > \`\`\`bash
-> npx @agegr/pi-web@latest
+> ${DEMO_INSTALL_COMMAND.replaceAll("\n", "\n> ")}
 > \`\`\``,
           },
         },
